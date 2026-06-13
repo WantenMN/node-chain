@@ -77,6 +77,8 @@ export const useStore = create((set, get) => {
           : { branches: merged };
       });
     } else if (msg.action === "nodes:updated") {
+      // Skip if node is being edited locally
+      if (state._dirtyNodeIds.has(msg.data.id)) return;
       set((s) => ({
         nodes: s.nodes.map((n) => (n.id === msg.data.id ? msg.data : n)),
       }));
@@ -103,6 +105,11 @@ export const useStore = create((set, get) => {
           selectedPath: data.length > 0 ? data[0].path : [],
           loading: false,
         });
+        // Resync nodes for current path after reconnect
+        const currentPath = get().selectedPath;
+        if (currentPath.length > 0) {
+          get().loadNodes(currentPath);
+        }
       });
     };
 
@@ -142,6 +149,8 @@ export const useStore = create((set, get) => {
     _scrollToBottom: false,
     _draggedNodeId: null,
     _hoveredNodeId: null,
+    _nodesRequestId: null,
+    _dirtyNodeIds: new Set(),
 
     // Actions
     connect,
@@ -152,13 +161,19 @@ export const useStore = create((set, get) => {
     },
 
     loadNodes: async (path) => {
+      const requestId = crypto.randomUUID();
+      set({ _nodesRequestId: requestId });
       const nodes = await send("nodes:list", { path });
+      if (get()._nodesRequestId !== requestId) return;
       set({ nodes });
     },
 
     createNode: async (payload) => {
       if (get()._submitting) return null;
       set({ _submitting: true });
+      const prevNodes = get().nodes;
+      const prevPath = get().selectedPath;
+      const prevBranches = get().branches;
       try {
         const node = await send("nodes:create", payload);
         if (payload.linked) {
@@ -182,24 +197,45 @@ export const useStore = create((set, get) => {
           set({ _newBranchNodeId: node.id });
         }
         return node;
+      } catch {
+        set({ nodes: prevNodes, selectedPath: prevPath, branches: prevBranches });
+        return null;
       } finally {
         set({ _submitting: false });
       }
     },
 
     deleteNode: async (id) => {
-      set((s) => ({ nodes: s.nodes.filter((n) => n.id !== id) }));
-      await send("nodes:delete", { id });
+      const prev = get().nodes;
+      set({ nodes: prev.filter((n) => n.id !== id) });
+      try {
+        await send("nodes:delete", { id });
+      } catch {
+        set({ nodes: prev });
+      }
     },
 
     updateNode: async (id, content) => {
+      const prev = get().nodes;
       set((s) => ({
         nodes: s.nodes.map((n) => n.id === id ? { ...n, content } : n),
+        _dirtyNodeIds: new Set([...s._dirtyNodeIds, id]),
       }));
-      await send("nodes:update", { id, content });
+      try {
+        await send("nodes:update", { id, content });
+      } catch {
+        set({ nodes: prev });
+      } finally {
+        set((s) => {
+          const next = new Set(s._dirtyNodeIds);
+          next.delete(id);
+          return { _dirtyNodeIds: next };
+        });
+      }
     },
 
     moveNode: async (nodeId, beforeId) => {
+      const prev = get().nodes;
       set((s) => {
         const dragIdx = s.nodes.findIndex((n) => n.id === nodeId);
         if (dragIdx < 0) return s;
@@ -214,7 +250,11 @@ export const useStore = create((set, get) => {
           return { nodes: [...without, dragged] };
         }
       });
-      await send("nodes:reorder", { id: nodeId, beforeId });
+      try {
+        await send("nodes:reorder", { id: nodeId, beforeId });
+      } catch {
+        set({ nodes: prev });
+      }
     },
 
     setInput: (value) => set({ input: value }),
@@ -224,6 +264,10 @@ export const useStore = create((set, get) => {
       const text = input.trim();
       if (!text || !connected || _submitting) return;
       const parentId = nodes.length > 0 ? nodes[nodes.length - 1].id : null;
+      const prevInput = input;
+      const prevNodes = nodes;
+      const prevPath = get().selectedPath;
+      const prevBranches = get().branches;
       set({ input: "", _submitting: true });
       try {
         const node = await doSend("nodes:create", { content: text, parent_id: parentId });
@@ -244,6 +288,8 @@ export const useStore = create((set, get) => {
             _scrollToBottom: true,
           };
         });
+      } catch {
+        set({ input: prevInput, nodes: prevNodes, selectedPath: prevPath, branches: prevBranches });
       } finally {
         set({ _submitting: false });
       }

@@ -1,11 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { GitFork, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { useStore } from "../store/use-store";
-import { Card } from "./ui/card";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { Popover, PopoverHeader, PopoverTitle, PopoverDescription } from "./ui/popover";
+import { useDrag } from "../lib/use-drag";
 
 function ForkPopover({ nodeId, selectedPath, onSelectBranch, open, onOpenChange, anchorEl }) {
   const send = useStore((s) => s.send);
@@ -13,7 +12,13 @@ function ForkPopover({ nodeId, selectedPath, onSelectBranch, open, onOpenChange,
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      const id = setTimeout(() => {
+        setLoaded(false);
+        setChildBranches([]);
+      }, 0);
+      return () => clearTimeout(id);
+    }
     let cancelled = false;
     send("branches:from", { nodeId }).then((data) => {
       if (cancelled) return;
@@ -27,13 +32,6 @@ function ForkPopover({ nodeId, selectedPath, onSelectBranch, open, onOpenChange,
     });
     return () => { cancelled = true; };
   }, [open, nodeId, send]);
-
-  useEffect(() => {
-    if (!open) {
-      setLoaded(false);
-      setChildBranches([]);
-    }
-  }, [open]);
 
   function pickLongest(paths) {
     return paths.reduce((best, p) => (p.count > best.count ? p : best), paths[0]);
@@ -86,17 +84,20 @@ function ForkPopover({ nodeId, selectedPath, onSelectBranch, open, onOpenChange,
 export function NodeCard({ node, index, isFork }) {
   const deleteNode = useStore((s) => s.deleteNode);
   const updateNode = useStore((s) => s.updateNode);
-  const moveNode = useStore((s) => s.moveNode);
   const selectPath = useStore((s) => s.selectPath);
   const selectedPath = useStore((s) => s.selectedPath);
+  const draggedNodeId = useStore((s) => s._draggedNodeId);
+  const hoveredNodeId = useStore((s) => s._hoveredNodeId);
 
   const [showFork, setShowFork] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
-  const triggerRef = useRef(null);
+  const [hovered, setHovered] = useState(false);
+  const [forkAnchorEl, setForkAnchorEl] = useState(null);
   const editRef = useRef(null);
 
-  // Edit mode
+  const { startDrag } = useDrag();
+
   function startEdit() {
     setEditText(node.content);
     setEditing(true);
@@ -106,9 +107,7 @@ export function NodeCard({ node, index, isFork }) {
     if (!editing || !editRef.current) return;
     const el = editRef.current;
     el.focus();
-    // Move cursor to end
     el.setSelectionRange(el.value.length, el.value.length);
-    // Auto-resize to fit full content
     requestAnimationFrame(() => {
       if (editRef.current) {
         editRef.current.style.height = "auto";
@@ -133,146 +132,136 @@ export function NodeCard({ node, index, isFork }) {
     if (e.key === "Escape") cancelEdit();
   }
 
-  // Drag
-  function handleDragStart(e) {
-    e.dataTransfer.setData("text/plain", String(node.id));
-    e.dataTransfer.effectAllowed = "move";
-    useStore.setState({ _draggedNodeId: node.id });
-    const card = e.currentTarget.closest("[data-card]");
-    if (card) {
-      const clone = card.cloneNode(true);
-      clone.style.opacity = "0.5";
-      clone.style.position = "absolute";
-      clone.style.top = "-9999px";
-      document.body.appendChild(clone);
-      e.dataTransfer.setDragImage(clone, 20, 20);
-      requestAnimationFrame(() => clone.remove());
-    }
-  }
-
-  function handleDragEnd() {
-    useStore.setState({ _draggedNodeId: null, _hoveredNodeId: null });
-  }
-
-  function handleCardDragOver(e) {
-    const draggedId = useStore.getState()._draggedNodeId;
-    if (draggedId === node.id || draggedId == null) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    useStore.setState({ _hoveredNodeId: node.id });
-  }
-
-  function handleCardDragLeave(e) {
-    // Only clear if mouse actually left the card (not just moved to a child element)
-    if (!e.currentTarget.contains(e.relatedTarget)) {
-      useStore.setState({ _hoveredNodeId: null });
-    }
-  }
-
-  function handleCardDrop(e) {
-    e.preventDefault();
-    const state = useStore.getState();
-    useStore.setState({ _draggedNodeId: null, _hoveredNodeId: null });
-    const draggedId = Number(e.dataTransfer.getData("text/plain"));
-    if (draggedId === node.id) return;
-    const allNodes = state.nodes;
-    const dragIdx = allNodes.findIndex((n) => n.id === draggedId);
-    const hoverIdx = allNodes.findIndex((n) => n.id === node.id);
-    // Dragging down → insert after hovered node; dragging up → insert before
-    const beforeId = dragIdx < hoverIdx
-      ? (hoverIdx < allNodes.length - 1 ? allNodes[hoverIdx + 1].id : null)
-      : node.id;
-    moveNode(draggedId, beforeId);
-  }
+  const isDragging = draggedNodeId === node.id;
+  const isDropTarget = hoveredNodeId === node.id && draggedNodeId != null && !isDragging;
 
   return (
     <>
-      <Card
-        data-card
-        className="group relative flex items-start gap-3 p-4 hover:shadow-md transition-shadow"
-        onDragOver={handleCardDragOver}
-        onDragLeave={handleCardDragLeave}
-        onDrop={handleCardDrop}
+      <div
+        className="group relative flex items-stretch"
+        data-drop-node={node.id}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
       >
-        {/* Drag handle — full height */}
-        <div
-          draggable
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          className="flex items-center self-stretch opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground -ml-1"
-          title="Drag to reorder"
-        >
-          <GripVertical className="h-4 w-4" />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          {editing ? (
-            <div className="space-y-2">
-              <textarea
-                ref={editRef}
-                value={editText}
-                onChange={(e) => setEditText(e.target.value)}
-                onKeyDown={handleEditKeyDown}
-                rows={1}
-                className="flex w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none overflow-hidden"
-                style={{ height: "auto" }}
-                onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
-              />
-              <div className="flex items-center gap-2">
-                <Button size="sm" disabled={!editText.trim()} onClick={saveEdit}>Save</Button>
-                <Button size="sm" variant="ghost" onClick={cancelEdit}>Cancel</Button>
-                <span className="text-xs text-muted-foreground ml-auto">Enter = save, Esc = cancel</span>
-              </div>
-            </div>
-          ) : (
-            <>
-              <p
-                className="text-sm leading-relaxed break-words cursor-text"
-                onDoubleClick={startEdit}
-                title="Double-click to edit"
-              >
-                {node.content}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
-                {isFork && (
-                  <Badge
-                    ref={triggerRef}
-                    variant="secondary"
-                    className="gap-0.5 cursor-pointer hover:bg-amber-100 text-amber-700"
-                    onClick={() => setShowFork((v) => !v)}
-                  >
-                    <GitFork className="h-3 w-3" />
-                    Branches
-                  </Badge>
-                )}
-              </p>
-            </>
-          )}
-        </div>
-
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {!editing && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-              onClick={startEdit}
-              title="Edit node"
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-            onClick={() => deleteNode(node.id)}
-            title="Delete node"
+        {/* Rail column: dot aligned to first line of text */}
+        <div className="relative w-8 shrink-0">
+          <div
+            className="absolute z-10"
+            style={{ left: 16, top: 22, transform: "translate(-50%, -50%)" }}
           >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+            <div
+              className={`w-3 h-3 rounded-full border-2 transition-all duration-200 ${
+                isDragging
+                  ? "border-muted-foreground/30 bg-muted scale-75 opacity-50"
+                  : isDropTarget
+                    ? "border-timeline-active bg-timeline-active/20 scale-110"
+                    : isFork
+                      ? "border-timeline-fork bg-timeline-fork/20"
+                      : hovered
+                        ? "border-timeline-dot-hover bg-white scale-110"
+                        : "border-timeline-dot bg-white"
+              }`}
+            >
+              {hovered && !editing && !isDragging && (
+                <span
+                  className="absolute inset-0 rounded-full bg-timeline-dot-hover/30"
+                  style={{ animation: "dot-pulse 1.5s ease-in-out infinite" }}
+                />
+              )}
+            </div>
+          </div>
         </div>
-      </Card>
+
+        {/* Content area */}
+        <div className={`flex-1 min-w-0 pt-3 pb-3 pr-1 ${isDragging ? "opacity-40" : ""}`}>
+          <div className="flex items-start gap-2">
+            {/* Index number */}
+            <span className="text-[11px] font-mono text-muted-foreground/50 mt-[3px] w-5 shrink-0 text-right select-none">
+              {index}
+            </span>
+
+            {/* Main content */}
+            <div className="flex-1 min-w-0">
+              {editing ? (
+                <div className="space-y-2">
+                  <textarea
+                    ref={editRef}
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    onKeyDown={handleEditKeyDown}
+                    rows={1}
+                    className="flex w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 focus:border-primary resize-none overflow-hidden"
+                    style={{ height: "auto" }}
+                    onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" disabled={!editText.trim()} onClick={saveEdit}>Save</Button>
+                    <Button size="sm" variant="ghost" onClick={cancelEdit}>Cancel</Button>
+                    <span className="text-xs text-muted-foreground ml-auto">Enter = save, Esc = cancel</span>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p
+                    className="text-sm leading-relaxed break-words cursor-text select-text"
+                    onDoubleClick={startEdit}
+                    title="Double-click to edit"
+                  >
+                    {node.content}
+                  </p>
+                  {isFork && (
+                    <button
+                      ref={setForkAnchorEl}
+                      className="inline-flex items-center gap-1 mt-1 -ml-0.5 px-1.5 py-0.5 rounded-md text-[11px] font-medium text-muted-foreground/70 hover:text-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                      onClick={() => setShowFork((v) => !v)}
+                    >
+                      <GitFork className="h-3 w-3" />
+                      <span>branches</span>
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Actions — shown on hover */}
+            {!editing && (
+              <div
+                className={`flex items-center gap-0.5 shrink-0 transition-opacity duration-150 ${
+                  hovered && !isDragging ? "opacity-100" : "opacity-0"
+                }`}
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={startEdit}
+                  title="Edit node"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => deleteNode(node.id)}
+                  title="Delete node"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+                <div
+                  className="flex items-center justify-center h-7 w-7 cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground rounded-md hover:bg-accent transition-colors"
+                  title="Drag to reorder"
+                  onPointerDown={(e) => startDrag(e, node.id, node.content)}
+                >
+                  <GripVertical className="h-3.5 w-3.5" />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {isFork && (
         <ForkPopover
@@ -281,7 +270,7 @@ export function NodeCard({ node, index, isFork }) {
           onSelectBranch={selectPath}
           open={showFork}
           onOpenChange={setShowFork}
-          anchorEl={triggerRef.current}
+          anchorEl={forkAnchorEl}
         />
       )}
     </>

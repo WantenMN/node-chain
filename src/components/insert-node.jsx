@@ -1,33 +1,30 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, GitBranch, Link2, Plus } from "lucide-react";
+import { GitBranch, Link2, Plus } from "lucide-react";
 import { useStore } from "../store/use-store";
 import { Button } from "./ui/button";
 
 export function InsertNode({ prevNode, nextNode, beforeCreate }) {
-  const connected = useStore((s) => s.connected);
   const createNode = useStore((s) => s.createNode);
-  const moveNode = useStore((s) => s.moveNode);
   const hoveredNodeId = useStore((s) => s._hoveredNodeId);
   const draggedNodeId = useStore((s) => s._draggedNodeId);
-  const nodes = useStore((s) => s.nodes);
 
   const [active, setActive] = useState(false);
   const [text, setText] = useState("");
+  const [hovered, setHovered] = useState(false);
   const wrapperRef = useRef(null);
+  const inputRef = useRef(null);
 
-  // Determine direction by comparing dragged and hovered positions in the list
+  const isDragging = draggedNodeId != null;
   const showDropIndicator = (() => {
     if (hoveredNodeId == null || draggedNodeId == null) return false;
     if (hoveredNodeId === draggedNodeId) return false;
+    const nodes = useStore.getState().nodes;
     const dragIdx = nodes.findIndex((n) => n.id === draggedNodeId);
     const hoverIdx = nodes.findIndex((n) => n.id === hoveredNodeId);
     if (dragIdx < 0 || hoverIdx < 0) return false;
-    // Dragging down (dragIdx < hoverIdx): indicator below hovered → this gap if prevNode is hovered
-    // Dragging up (dragIdx > hoverIdx): indicator above hovered → this gap if nextNode is hovered
     return (dragIdx < hoverIdx && prevNode?.id === hoveredNodeId) ||
            (dragIdx > hoverIdx && nextNode?.id === hoveredNodeId);
   })();
-  const inputRef = useRef(null);
 
   useEffect(() => {
     if (active) inputRef.current?.focus();
@@ -73,72 +70,92 @@ export function InsertNode({ prevNode, nextNode, beforeCreate }) {
     }
   }
 
-  // Drop handling
-  function handleDrop(e) {
-    e.preventDefault();
-    useStore.setState({ _dropTarget: null, _draggedNodeId: null });
-    const draggedId = Number(e.dataTransfer.getData("text/plain"));
-    moveNode(draggedId, nextNode?.id ?? null);
-  }
-
+  // When inserting (active mode), render full-height
   if (active) {
     return (
-      <div ref={wrapperRef} className="flex flex-col items-center py-2">
-        <ArrowDown className="h-4 w-4 text-muted-foreground/30" />
-        <div className="w-full rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 p-3 my-1 space-y-2">
-          <textarea
-            ref={inputRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Node content..."
-            rows={1}
-            className="flex w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none overflow-hidden"
-            style={{ height: "auto" }}
-            onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
-          />
-          <div className="flex items-center gap-2">
-            <Button size="sm" disabled={!text.trim()} onClick={() => handleCreate(true)}>
-              <Link2 className="h-3 w-3" />
-              Linked
-            </Button>
-            <Button size="sm" variant="outline" disabled={!text.trim()} onClick={() => handleCreate(false)}>
-              <GitBranch className="h-3 w-3" />
-              Branch
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => { setActive(false); setText(""); }}>
-              Cancel
-            </Button>
-            <span className="text-xs text-muted-foreground ml-auto">
-              Enter = linked, Shift+Enter = branch
-            </span>
+      <div ref={wrapperRef} className="flex items-stretch">
+        <div className="relative w-8 shrink-0 flex items-center justify-center">
+          <div className="w-3 h-3 rounded-full border-2 border-dashed border-timeline-active bg-white shrink-0" />
+        </div>
+        <div className="flex-1 min-w-0 py-2 pr-1">
+          <div className="ml-[6px]">
+            <div className="rounded-xl border-2 border-dashed border-primary/30 bg-primary/[0.02] p-3 space-y-2.5">
+              <textarea
+                ref={inputRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Node content..."
+                rows={1}
+                className="flex w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 focus:border-primary resize-none overflow-hidden"
+                style={{ height: "auto" }}
+                onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
+              />
+              <div className="flex items-center gap-2">
+                <Button size="sm" disabled={!text.trim()} onClick={() => handleCreate(true)}>
+                  <Link2 className="h-3 w-3" />
+                  Linked
+                </Button>
+                <Button size="sm" variant="outline" disabled={!text.trim()} onClick={() => handleCreate(false)}>
+                  <GitBranch className="h-3 w-3" />
+                  Branch
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setActive(false); setText(""); }}>
+                  Cancel
+                </Button>
+                <span className="text-xs text-muted-foreground ml-auto hidden sm:inline">
+                  Enter = linked, Shift+Enter = branch
+                </span>
+              </div>
+            </div>
           </div>
         </div>
-        <ArrowDown className="h-4 w-4 text-muted-foreground/30" />
       </div>
     );
   }
 
-  if (showDropIndicator) {
-    return (
-      <div
-        className="flex items-center justify-center h-10 rounded-lg border-2 border-dashed border-primary bg-primary/5 mx-4"
-        onDrop={handleDrop}
-      >
-        <Plus className="h-4 w-4 text-primary" />
-        <span className="text-xs text-primary font-medium ml-1.5">Insert here</span>
-      </div>
-    );
-  }
-
+  // Default: zero-height, full-width hover/click zone
   return (
     <div
-      className="group/insert flex items-center justify-center h-10 cursor-pointer select-none"
-      onClick={() => setActive(true)}
-      title="Insert node here"
+      className="relative overflow-visible select-none cursor-pointer"
+      style={{ height: 0, paddingTop: 10, marginTop: -10 }}
+      data-drop-insert="gap"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={() => { if (!isDragging) setActive(true); }}
     >
-      <ArrowDown className="h-4 w-4 text-muted-foreground/30 group-hover/insert:hidden" />
-      <Plus className="h-4 w-4 text-primary hidden group-hover/insert:block" />
+      {/* Plus icon on the timeline — purely visual */}
+      {!isDragging && (
+        <div
+          className="absolute pointer-events-none z-10"
+          style={{ left: 16, top: "50%", transform: "translate(-50%, -50%)" }}
+        >
+          <div
+            className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all duration-150 ${
+              hovered
+                ? "border-timeline-active bg-timeline-active/10 scale-100"
+                : "border-transparent bg-transparent scale-75"
+            }`}
+          >
+            <Plus
+              className={`h-3 w-3 transition-colors duration-150 ${
+                hovered ? "text-timeline-active" : "text-transparent"
+              }`}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Drop indicator — glowing line + pill */}
+      {showDropIndicator && (
+        <>
+          <div className="absolute inset-x-0 h-[2px] bg-timeline-active shadow-[0_0_6px_var(--color-timeline-active)]" style={{ top: "50%", transform: "translateY(-50%)" }} />
+          <div className="absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-timeline-active text-white text-[11px] font-medium shadow-sm whitespace-nowrap" style={{ left: 24, top: "50%", transform: "translateY(-50%)" }}>
+            <Plus className="h-3 w-3" />
+            Drop here
+          </div>
+        </>
+      )}
     </div>
   );
 }

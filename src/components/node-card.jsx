@@ -1,10 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { GitBranch, GitFork, GripVertical, Link2, Pencil, Trash2 } from "lucide-react";
+import { GitFork, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { useStore } from "../store/use-store";
 import { Card } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { Skeleton } from "./ui/skeleton";
 import { Popover, PopoverHeader, PopoverTitle, PopoverDescription } from "./ui/popover";
 
@@ -85,7 +84,6 @@ function ForkPopover({ nodeId, selectedPath, onSelectBranch, open, onOpenChange,
 }
 
 export function NodeCard({ node, index, isFork }) {
-  const getDisplayIndex = useStore((s) => s.getDisplayIndex);
   const deleteNode = useStore((s) => s.deleteNode);
   const updateNode = useStore((s) => s.updateNode);
   const moveNode = useStore((s) => s.moveNode);
@@ -98,8 +96,6 @@ export function NodeCard({ node, index, isFork }) {
   const triggerRef = useRef(null);
   const editRef = useRef(null);
 
-  const parentIndex = getDisplayIndex(node.parent_id);
-
   // Edit mode
   function startEdit() {
     setEditText(node.content);
@@ -107,7 +103,18 @@ export function NodeCard({ node, index, isFork }) {
   }
 
   useEffect(() => {
-    if (editing) editRef.current?.focus();
+    if (!editing || !editRef.current) return;
+    const el = editRef.current;
+    el.focus();
+    // Move cursor to end
+    el.setSelectionRange(el.value.length, el.value.length);
+    // Auto-resize to fit full content
+    requestAnimationFrame(() => {
+      if (editRef.current) {
+        editRef.current.style.height = "auto";
+        editRef.current.style.height = editRef.current.scrollHeight + "px";
+      }
+    });
   }, [editing]);
 
   function saveEdit() {
@@ -187,30 +194,29 @@ export function NodeCard({ node, index, isFork }) {
         onDragLeave={handleCardDragLeave}
         onDrop={handleCardDrop}
       >
-        {/* Drag handle */}
+        {/* Drag handle — full height */}
         <div
           draggable
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
-          className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground -ml-1"
+          className="flex items-center self-stretch opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground -ml-1"
           title="Drag to reorder"
         >
           <GripVertical className="h-4 w-4" />
         </div>
 
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
-          {index}
-        </div>
-
         <div className="flex-1 min-w-0">
           {editing ? (
             <div className="space-y-2">
-              <Input
+              <textarea
                 ref={editRef}
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
                 onKeyDown={handleEditKeyDown}
-                className="text-sm"
+                rows={1}
+                className="flex w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none overflow-hidden"
+                style={{ height: "auto" }}
+                onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
               />
               <div className="flex items-center gap-2">
                 <Button size="sm" disabled={!editText.trim()} onClick={saveEdit}>Save</Button>
@@ -228,18 +234,6 @@ export function NodeCard({ node, index, isFork }) {
                 {node.content}
               </p>
               <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
-                <span>{new Date(node.created_at + "Z").toLocaleString()}</span>
-                {node.parent_id != null ? (
-                  <Badge variant="outline" className="gap-0.5">
-                    <Link2 className="h-3 w-3" />
-                    linked to #{parentIndex}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="gap-0.5">
-                    <GitBranch className="h-3 w-3" />
-                    root
-                  </Badge>
-                )}
                 {isFork && (
                   <Badge
                     ref={triggerRef}

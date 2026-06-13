@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowDown, GitBranch, Link2, Plus } from "lucide-react";
 import { useStore } from "../store/use-store";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 
 export function InsertNode({ prevNode, nextNode, beforeCreate }) {
   const connected = useStore((s) => s.connected);
@@ -87,12 +86,16 @@ export function InsertNode({ prevNode, nextNode, beforeCreate }) {
       <div ref={wrapperRef} className="flex flex-col items-center py-2">
         <ArrowDown className="h-4 w-4 text-muted-foreground/30" />
         <div className="w-full rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 p-3 my-1 space-y-2">
-          <Input
+          <textarea
             ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Node content..."
+            rows={1}
+            className="flex w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none overflow-hidden"
+            style={{ height: "auto" }}
+            onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
           />
           <div className="flex items-center gap-2">
             <Button size="sm" disabled={!text.trim()} onClick={() => handleCreate(true)}>

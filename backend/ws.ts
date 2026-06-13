@@ -1,4 +1,4 @@
-import { db, getNode, getBranchMeta, getBranchPath, getBranchNodes } from "./db.ts";
+import { db, getNode, getBranchMeta, getBranchPath, getBranchNodes, getProjects, createProject, deleteProject } from "./db.ts";
 
 const clients = new Set<WebSocket>();
 
@@ -14,8 +14,8 @@ function send(ws: WebSocket, data: unknown) {
 }
 
 /** Broadcast lightweight branch metadata to all clients. */
-function broadcastBranchMeta(exclude?: WebSocket) {
-  const branches = getBranchMeta();
+function broadcastBranchMeta(projectId?: number | null, exclude?: WebSocket) {
+  const branches = getBranchMeta(projectId);
   broadcast({ action: "branches:list", data: branches }, exclude);
   return branches;
 }
@@ -40,9 +40,33 @@ function handleMessage(ws: WebSocket, raw: string) {
   const { action, requestId, payload } = msg;
 
   switch (action) {
+    // ── Projects ─────────────────────────────────────────────────────────
+    case "projects:list": {
+      const projects = getProjects();
+      send(ws, { action: "projects:list", requestId, data: projects });
+      break;
+    }
+
+    case "projects:create": {
+      const { name } = payload;
+      const project = createProject(name);
+      send(ws, { action: "projects:create", requestId, data: project });
+      broadcast({ action: "projects:updated", data: getProjects() }, ws);
+      break;
+    }
+
+    case "projects:delete": {
+      const { id: pid } = payload;
+      deleteProject(pid);
+      send(ws, { action: "projects:delete", requestId, data: { ok: true } });
+      broadcast({ action: "projects:updated", data: getProjects() }, ws);
+      break;
+    }
+
     // ── Branch metadata (lightweight — no paths, no node data) ───────────
     case "branches:list": {
-      const branches = getBranchMeta();
+      const { projectId: bpId } = payload ?? {};
+      const branches = getBranchMeta(bpId);
       send(ws, { action: "branches:list", requestId, data: branches });
       break;
     }
@@ -134,7 +158,7 @@ function handleMessage(ws: WebSocket, raw: string) {
 
     // ── Load nodes for a branch (by leafId) ─────────────────────────────
     case "nodes:list": {
-      const { leafId, path } = payload;
+      const { leafId, path, projectId: nlPid } = payload;
       if (leafId != null) {
         send(ws, { action: "nodes:list", requestId, data: getBranchNodes(leafId) });
       } else if (path && Array.isArray(path) && path.length > 0) {
@@ -145,7 +169,9 @@ function handleMessage(ws: WebSocket, raw: string) {
         );
         send(ws, { action: "nodes:list", requestId, data: path.map((id: number) => nodeMap.get(id)).filter(Boolean) });
       } else {
-        const nodes = db.prepare("SELECT * FROM nodes ORDER BY order_val ASC").all();
+        const nodes = nlPid != null
+          ? db.prepare("SELECT * FROM nodes WHERE project_id = ? ORDER BY order_val ASC").all(nlPid)
+          : db.prepare("SELECT * FROM nodes WHERE project_id IS NULL ORDER BY order_val ASC").all();
         send(ws, { action: "nodes:list", requestId, data: nodes });
       }
       break;
@@ -153,7 +179,7 @@ function handleMessage(ws: WebSocket, raw: string) {
 
     // ── Create node ─────────────────────────────────────────────────────
     case "nodes:create": {
-      const { content, parent_id, after_id, linked } = payload;
+      const { content, parent_id, after_id, linked, projectId } = payload;
 
       let order_val: number;
       let nextNode: { id: number; order_val: number; parent_id: number | null } | undefined;
@@ -177,8 +203,8 @@ function handleMessage(ws: WebSocket, raw: string) {
       }
 
       const result = db.prepare(
-        "INSERT INTO nodes (content, parent_id, order_val) VALUES (?, ?, ?)"
-      ).run(content, parent_id ?? null, order_val);
+        "INSERT INTO nodes (content, parent_id, order_val, project_id) VALUES (?, ?, ?, ?)"
+      ).run(content, parent_id ?? null, order_val, projectId ?? null);
 
       const node = db.prepare("SELECT * FROM nodes WHERE id = ?").get(result.lastInsertRowid);
       send(ws, { action: "nodes:create", requestId, data: node });
@@ -193,7 +219,7 @@ function handleMessage(ws: WebSocket, raw: string) {
         broadcast({ action: "nodes:updated", data: updated }, ws);
       }
 
-      const branches = broadcastBranchMeta(ws);
+      const branches = broadcastBranchMeta(projectId, ws);
       send(ws, { action: "branches:list", data: branches });
       break;
     }
@@ -201,8 +227,9 @@ function handleMessage(ws: WebSocket, raw: string) {
     // ── Delete single node ──────────────────────────────────────────────
     case "nodes:delete": {
       const { id } = payload;
-      const node = db.prepare("SELECT parent_id FROM nodes WHERE id = ?").get(id) as { parent_id: number | null } | undefined;
+      const node = db.prepare("SELECT parent_id, project_id FROM nodes WHERE id = ?").get(id) as { parent_id: number | null; project_id: number | null } | undefined;
       const grandparentId = node?.parent_id ?? null;
+      const deleteProjectId = node?.project_id ?? null;
       db.exec("BEGIN");
       try {
         db.prepare("UPDATE nodes SET parent_id = ? WHERE parent_id = ?").run(grandparentId, id);
@@ -216,14 +243,14 @@ function handleMessage(ws: WebSocket, raw: string) {
       send(ws, { action: "nodes:delete", requestId, data: { ok: true } });
       broadcast({ action: "nodes:deleted", data: { id } }, ws);
 
-      const branches = broadcastBranchMeta(ws);
+      const branches = broadcastBranchMeta(deleteProjectId, ws);
       send(ws, { action: "branches:list", data: branches });
       break;
     }
 
     // ── Batch delete ────────────────────────────────────────────────────
     case "nodes:delete_batch": {
-      const { ids } = payload as { ids: number[] };
+      const { ids, projectId: batchProjectId } = payload as { ids: number[]; projectId?: number };
       if (!ids || !Array.isArray(ids) || ids.length === 0) {
         send(ws, { action: "nodes:delete_batch", requestId, error: "ids array is required" });
         break;
@@ -259,7 +286,7 @@ function handleMessage(ws: WebSocket, raw: string) {
       send(ws, { action: "nodes:delete_batch", requestId, data: { ok: true } });
       broadcast({ action: "nodes:deleted_batch", data: { ids } }, ws);
 
-      const branches = broadcastBranchMeta(ws);
+      const branches = broadcastBranchMeta(batchProjectId, ws);
       send(ws, { action: "branches:list", data: branches });
       break;
     }

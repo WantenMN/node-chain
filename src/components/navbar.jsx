@@ -1,5 +1,5 @@
-import { Link } from "@tanstack/react-router";
-import { Link2 } from "lucide-react";
+import { Link, useMatches } from "@tanstack/react-router";
+import { Link2, ArrowLeft } from "lucide-react";
 import { useStore } from "../store/use-store";
 import { cn } from "../lib/utils";
 
@@ -53,13 +53,33 @@ function ConnectionDot() {
 }
 
 export function Navbar() {
+  const matches = useMatches();
+  const projects = useStore((s) => s.projects);
+
+  // Check if we're on a project route
+  const projectMatch = matches.find((m) => m.routeId === "/projects/$projectId");
+  const projectId = projectMatch?.params?.projectId;
+  const project = projectId ? projects.find((p) => p.id === Number(projectId)) : null;
+
   return (
     <header className="sticky top-0 z-50 shadow-[0_1px_0_var(--color-border)] bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto flex h-14 items-center px-4">
-        <Link to="/" className="flex items-center gap-2 font-bold">
-          <Link2 className="h-5 w-5" />
-          <span>Node Chain</span>
-        </Link>
+        {project ? (
+          <Link to="/" className="flex items-center gap-2 font-bold group">
+            <ArrowLeft className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+            <span className="text-muted-foreground group-hover:text-foreground transition-colors">Projects</span>
+            <span className="text-muted-foreground/40 mx-1">/</span>
+            <span className="flex items-center gap-1.5">
+              <Link2 className="h-5 w-5" />
+              {project.name}
+            </span>
+          </Link>
+        ) : (
+          <Link to="/" className="flex items-center gap-2 font-bold">
+            <Link2 className="h-5 w-5" />
+            <span>Node Chain</span>
+          </Link>
+        )}
         <div className="ml-auto">
           <ConnectionDot />
         </div>

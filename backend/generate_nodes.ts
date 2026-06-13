@@ -89,25 +89,29 @@ function randomSentence(): string {
 // ── Generator ────────────────────────────────────────────────────────────────
 
 async function generateNodes(trunkLength: number, branchCount: number) {
-  console.log(`Generating trunk of ${trunkLength} nodes + ${branchCount} branches...`);
+  console.log(`Generating project with trunk of ${trunkLength} nodes + ${branchCount} branches...`);
 
   db.exec("BEGIN");
 
   try {
-    // Clear existing data
-    db.exec("DELETE FROM branches");
-    db.exec("DELETE FROM nodes");
+    // --- 0. Create a new test project ---
+    const projectName = `Test Project ${new Date().toISOString().slice(0, 19).replace("T", " ")}`;
+    const projectResult = db.prepare(
+      "INSERT INTO projects (name) VALUES (?)"
+    ).run(projectName);
+    const projectId = projectResult.lastInsertRowid as number;
+    console.log(`✓ Created project "${projectName}" (id=${projectId})`);
 
     // --- 1. Generate main trunk ---
     const insertNode = db.prepare(
-      "INSERT INTO nodes (content, parent_id, order_val) VALUES (?, ?, ?)"
+      "INSERT INTO nodes (content, parent_id, order_val, project_id) VALUES (?, ?, ?, ?)"
     );
 
     const trunkNodeIds: number[] = [];
     let lastParentId: number | null = null;
 
     for (let i = 0; i < trunkLength; i++) {
-      const result = insertNode.run(randomSentence(), lastParentId, i + 1);
+      const result = insertNode.run(randomSentence(), lastParentId, i + 1, projectId);
       const id = result.lastInsertRowid as number;
       trunkNodeIds.push(id);
       lastParentId = id;
@@ -132,7 +136,7 @@ async function generateNodes(trunkLength: number, branchCount: number) {
         ).get(branchParentId) as { m: number | null };
         const order_val = (maxSibling?.m ?? 0) + 1;
 
-        const result = insertNode.run(randomSentence(), branchParentId, order_val);
+        const result = insertNode.run(randomSentence(), branchParentId, order_val, projectId);
         branchParentId = result.lastInsertRowid as number;
         totalBranchNodes++;
       }
@@ -141,10 +145,9 @@ async function generateNodes(trunkLength: number, branchCount: number) {
     // --- 3. Rebuild branches table ---
     const leaves = db.prepare(`
       SELECT id FROM nodes
-      WHERE id NOT IN (SELECT DISTINCT parent_id FROM nodes WHERE parent_id IS NOT NULL)
-    `).all() as { id: number }[];
+      WHERE project_id = ? AND id NOT IN (SELECT DISTINCT parent_id FROM nodes WHERE parent_id IS NOT NULL)
+    `).all(projectId) as { id: number }[];
 
-    db.exec("DELETE FROM branches");
     const insertBranch = db.prepare("INSERT INTO branches (leaf_id) VALUES (?)");
     for (const leaf of leaves) {
       insertBranch.run(leaf.id);
@@ -153,6 +156,7 @@ async function generateNodes(trunkLength: number, branchCount: number) {
     db.exec("COMMIT");
 
     console.log(`✓ ${trunkLength} trunk nodes + ${totalBranchNodes} branch nodes (${leaves.length} branches)`);
+    console.log(`  Project "${projectName}" (id=${projectId}) ready at /projects/${projectId}`);
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
@@ -163,6 +167,6 @@ async function generateNodes(trunkLength: number, branchCount: number) {
 
 if (import.meta.main) {
   const t = performance.now();
-  await generateNodes(180000, 8);
+  await generateNodes(180000, 20);
   console.log(`Done in ${(performance.now() - t).toFixed(0)}ms`);
 }

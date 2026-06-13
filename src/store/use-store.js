@@ -60,6 +60,8 @@ export const useStore = create((set, get) => {
       if (branchWasDeleted) {
         get().selectBranch(get().selectedLeafId);
       }
+    } else if (msg.action === "projects:updated") {
+      set({ projects: msg.data });
     } else if (msg.action === "nodes:updated") {
       if (state._dirtyNodeIds.has(msg.data.id)) return;
       set((s) => ({
@@ -93,11 +95,9 @@ export const useStore = create((set, get) => {
     ws.onopen = () => {
       if (ws !== currentWs) return;
       set({ connected: true, _hasConnected: true });
-      // Load branch metadata only (lightweight — no paths, no node data)
-      send("branches:list").then((branches) => {
-        const firstLeafId = branches.length > 0 ? branches[0].branchId : null;
-        set({ branches, selectedLeafId: firstLeafId, loading: false });
-        if (firstLeafId) get().selectBranch(firstLeafId);
+      // Load projects list on connect
+      send("projects:list").then((projects) => {
+        set({ projects, loading: false });
       });
     };
 
@@ -123,6 +123,8 @@ export const useStore = create((set, get) => {
 
   return {
     // State
+    projects: [],
+    currentProjectId: null,
     branches: [],           // { branchId, count, preview } — NO path
     selectedLeafId: null,   // which branch is selected (leaf node id)
     selectedPath: [],       // loaded lazily when branch is selected
@@ -144,6 +146,39 @@ export const useStore = create((set, get) => {
     // Actions
     connect,
     send,
+
+    /** Load all projects. */
+    loadProjects: async () => {
+      const projects = await send("projects:list");
+      set({ projects });
+      return projects;
+    },
+
+    /** Create a new project. */
+    createProject: async (name) => {
+      const project = await send("projects:create", { name });
+      set((s) => ({ projects: [project, ...s.projects] }));
+      return project;
+    },
+
+    /** Delete a project and all its nodes. */
+    deleteProject: async (id) => {
+      await send("projects:delete", { id });
+      set((s) => ({
+        projects: s.projects.filter((p) => p.id !== id),
+        // If we deleted the current project, reset
+        ...(s.currentProjectId === id ? { currentProjectId: null, branches: [], nodes: [], selectedLeafId: null, selectedPath: [] } : {}),
+      }));
+    },
+
+    /** Set the active project and load its branches. */
+    setCurrentProject: async (projectId) => {
+      set({ currentProjectId: projectId, branches: [], nodes: [], selectedLeafId: null, selectedPath: [], loading: true });
+      const branches = await send("branches:list", { projectId });
+      const firstLeafId = branches.length > 0 ? branches[0].branchId : null;
+      set({ branches, selectedLeafId: firstLeafId, loading: false });
+      if (firstLeafId) get().selectBranch(firstLeafId);
+    },
 
     /** Select a branch by its leafId. Fetches path + nodes. */
     selectBranch: async (leafId) => {
@@ -185,7 +220,8 @@ export const useStore = create((set, get) => {
       const prevPath = get().selectedPath;
       const prevBranches = get().branches;
       try {
-        const node = await send("nodes:create", payload);
+        // Attach projectId to the payload
+        const node = await send("nodes:create", { ...payload, projectId: get().currentProjectId });
         if (payload.linked) {
           set((s) => {
             const idx = s.nodes.findIndex((n) => n.id === payload.after_id);
@@ -260,7 +296,7 @@ export const useStore = create((set, get) => {
       });
 
       try {
-        await send("nodes:delete_batch", { ids: idsToDelete });
+        await send("nodes:delete_batch", { ids: idsToDelete, projectId: get().currentProjectId });
       } catch {
         set({ nodes: prev, selectedPath: prevPath });
       }
@@ -269,7 +305,7 @@ export const useStore = create((set, get) => {
     updateNode: async (id, content) => {
       const prev = get().nodes;
       set((s) => ({
-        nodes: s.nodes.map((n) => n.id === id ? { ...n, content } : n),
+        nodes: s.nodes.map((n) => (n.id === id ? { ...n, content } : n)),
         _dirtyNodeIds: new Set([...s._dirtyNodeIds, id]),
       }));
       try {
@@ -327,7 +363,11 @@ export const useStore = create((set, get) => {
       const prevBranches = get().branches;
       set({ input: "", _submitting: true });
       try {
-        const node = await doSend("nodes:create", { content: text, parent_id: parentId });
+        const node = await doSend("nodes:create", {
+          content: text,
+          parent_id: parentId,
+          projectId: get().currentProjectId,
+        });
         set((s) => {
           const newPath = [...s.selectedPath, node.id];
           const newBranches = s.branches.map((b) => {

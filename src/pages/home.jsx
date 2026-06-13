@@ -1,238 +1,181 @@
-import { useEffect, useRef, useMemo, useCallback } from "react";
-import { Link2, Plus, ChevronsUp, ChevronsDown } from "lucide-react";
-import { useWindowVirtualizer } from "@tanstack/react-virtual";
+import { useState, useEffect } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "../store/use-store";
-import { InsertNode } from "../components/insert-node";
-import { NodeCard } from "../components/node-card";
-import { BranchSidebar, MobileBranchSelect } from "../components/branch-sidebar";
-import { NodeInputBar } from "../components/node-input-bar";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
-
-function TopDropZone() {
-  const nodes = useStore((s) => s.nodes);
-  const hoveredNodeId = useStore((s) => s._hoveredNodeId);
-  const draggedNodeId = useStore((s) => s._draggedNodeId);
-  const isDragging = draggedNodeId != null;
-
-  const showIndicator = hoveredNodeId === nodes[0]?.id && isDragging &&
-    (() => {
-      const dragIdx = nodes.findIndex((n) => n.id === draggedNodeId);
-      return dragIdx > 0;
-    })();
-
-  return (
-    <div
-      className="relative h-0 overflow-visible"
-      data-drop-insert="top"
-    >
-      {showIndicator && (
-        <>
-          <div className="absolute inset-x-0 h-[2px] bg-timeline-active shadow-[0_0_6px_var(--color-timeline-active)]" style={{ top: 0 }} />
-          <div className="absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-timeline-active text-white text-[11px] font-medium shadow-sm whitespace-nowrap" style={{ left: 64, top: 0 }}>
-            <Plus className="h-3 w-3" />
-            Drop here
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
+import {
+  FolderOpen,
+  Plus,
+  GitBranch,
+  Layers,
+  Trash2,
+  ArrowRight,
+} from "lucide-react";
 
 export function Home() {
-  const bottomInputRef = useRef(null);
-  const anchorRef = useRef(null);
-
-  const branches = useStore((s) => s.branches);
-  const selectedPath = useStore((s) => s.selectedPath);
-  const nodes = useStore((s) => s.nodes);
+  const navigate = useNavigate();
+  const projects = useStore((s) => s.projects);
   const loading = useStore((s) => s.loading);
   const connected = useStore((s) => s.connected);
   const connect = useStore((s) => s.connect);
-  const loadNodes = useStore((s) => s.loadNodes);
-  const getForkPoints = useStore((s) => s.getForkPoints);
-  const forkNodeIds = useStore((s) => s._forkNodeIds);
+  const createProject = useStore((s) => s.createProject);
+  const deleteProject = useStore((s) => s.deleteProject);
 
-  // Virtualizer — only renders nodes visible in the viewport.
-  // Chromium caps element height at ~33,554,432px. With 72px estimate,
-  // ~466k nodes is the limit before clipping. Scale estimate dynamically.
-  const MAX_CONTAINER_HEIGHT = 33554432;
-  const virtualizer = useWindowVirtualizer({
-    count: nodes.length,
-    estimateSize: useCallback(() => {
-      const maxEstimate = Math.floor(MAX_CONTAINER_HEIGHT / Math.max(nodes.length, 1));
-      return Math.min(72, maxEstimate);
-    }, [nodes.length]),
-    overscan: 5,
-    measureElement: useCallback((el) => el.getBoundingClientRect().height, []),
-    getItemKey: useCallback((index) => nodes[index]?.id ?? index, [nodes]),
-  });
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
 
-  // Connect WebSocket on mount
   useEffect(() => { connect(); }, [connect]);
 
-  // Load nodes when selected path changes (guard: selectBranch already loads nodes)
-  useEffect(() => {
-    if (!connected || selectedPath.length === 0) return;
-
-    if (useStore.getState()._skipLoadNodes) {
-      useStore.setState({ _skipLoadNodes: false });
-      return;
-    }
-
-    snapshotAnchor();
-  }, [selectedPath, connected, loadNodes]);
-
-  function snapshotAnchor() {
-    const focused = document.activeElement;
-    if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA")) {
-      anchorRef.current = { el: focused, top: focused.getBoundingClientRect().top };
+  async function handleCreate(e) {
+    e.preventDefault();
+    const name = newName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    try {
+      const project = await createProject(name);
+      setNewName("");
+      setShowCreate(false);
+      navigate({ to: "/projects/$projectId", params: { projectId: String(project.id) } });
+    } finally {
+      setCreating(false);
     }
   }
 
-  // Scroll anchor: compensate so the input stays in place after node insert
-  useEffect(() => {
-    const anchor = anchorRef.current;
-    if (!anchor?.el) return;
-    anchorRef.current = null;
-    requestAnimationFrame(() => {
-      const newTop = anchor.el.getBoundingClientRect().top;
-      const delta = newTop - anchor.top;
-      if (Math.abs(delta) > 1) window.scrollBy(0, delta);
-    });
-  }, [nodes]);
-
-  // Scroll to bottom and refocus input after appendNode
-  useEffect(() => {
-    if (useStore.getState()._scrollToBottom) {
-      useStore.setState({ _scrollToBottom: false });
-      requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(nodes.length - 1, { align: "end" });
-        bottomInputRef.current?.focus();
-      });
+  async function handleDelete(e, id) {
+    e.stopPropagation();
+    if (deletingId) return;
+    setDeletingId(id);
+    try {
+      await deleteProject(id);
+    } finally {
+      setDeletingId(null);
     }
-  }, [nodes, virtualizer]);
+  }
 
-  const forkPoints = useMemo(() => getForkPoints(), [forkNodeIds, getForkPoints]);
-
-  const nodeIndexMap = useMemo(() => {
-    const map = new Map();
-    for (let i = 0; i < nodes.length; i++) map.set(nodes[i].id, i);
-    return map;
-  }, [nodes]);
+  function formatDate(dateStr) {
+    if (!dateStr) return "";
+    const d = new Date(dateStr + "Z");
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
 
   return (
-    <div className="flex">
-      {/* Sidebar */}
-      <BranchSidebar />
+    <div className="flex-1 px-4 py-8">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-2xl font-bold">Projects</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              {connected ? `${projects.length} project${projects.length !== 1 ? "s" : ""}` : "Connecting…"}
+            </p>
+          </div>
+          <Button onClick={() => setShowCreate(true)} disabled={!connected}>
+            <Plus className="h-4 w-4 mr-1.5" />
+            New Project
+          </Button>
+        </div>
 
-      {/* Content area */}
-      <div className="flex-1 min-w-0 px-4 py-6 pb-28">
-        <div className="max-w-2xl mx-auto">
-          <MobileBranchSelect />
-
-          {loading ? (
-            <div className="space-y-6 py-20 ml-[18px]">
-              <div className="flex items-center gap-4">
-                <Skeleton className="h-3 w-3 rounded-full shrink-0" />
-                <Skeleton className="h-4 w-3/4" />
-              </div>
-              <div className="flex items-center gap-4">
-                <Skeleton className="h-3 w-3 rounded-full shrink-0" />
-                <Skeleton className="h-4 w-1/2" />
-              </div>
-            </div>
-          ) : nodes.length === 0 ? (
-            <div className="text-center py-20 space-y-3">
-              <Link2 className="h-12 w-12 mx-auto text-muted-foreground/40" />
-              <p className="text-muted-foreground">No nodes yet. Type below to start a chain.</p>
-            </div>
-          ) : (
-            /* Timeline container — virtualized */
-            <div className="relative">
-              {/* Continuous line — behind everything, spans full virtual height.
-                  Left offset = index column (w-10 = 40px) + rail dot offset (16px) */}
-              <div
-                className="absolute top-0 w-px bg-timeline pointer-events-none"
-                style={{ left: 56, zIndex: 0, height: virtualizer.getTotalSize() }}
+        {/* Create form */}
+        {showCreate && (
+          <form onSubmit={handleCreate} className="mb-6">
+            <div className="flex gap-2">
+              <Input
+                autoFocus
+                placeholder="Project name…"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                disabled={creating}
+                className="max-w-sm"
               />
-
-              <TopDropZone />
-
-              <div
-                style={{
-                  height: virtualizer.getTotalSize(),
-                  width: "100%",
-                  position: "relative",
-                }}
+              <Button type="submit" disabled={!newName.trim() || creating}>
+                {creating ? "Creating…" : "Create"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => { setShowCreate(false); setNewName(""); }}
               >
-                {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const i = virtualRow.index;
-                  const node = nodes[i];
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
-                      data-node-index={i}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    >
-                      {i > 0 && (
-                        <InsertNode
-                          prevNode={nodes[i - 1]}
-                          nextNode={node}
-                          prevIndex={i - 1}
-                          nodeIndexMap={nodeIndexMap}
-                          beforeCreate={snapshotAnchor}
-                        />
-                      )}
-                      <NodeCard
-                        node={node}
-                        index={i + 1}
-                        isFork={forkPoints.has(node.id)}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Tail space */}
-              <div className="h-8" />
+                Cancel
+              </Button>
             </div>
-          )}
-        </div>
-      </div>
+          </form>
+        )}
 
-      {/* Fixed bottom input bar — content area only */}
-      <div className="fixed bottom-0 left-0 md:left-64 right-0 z-40">
-        <NodeInputBar inputRef={bottomInputRef} />
-      </div>
+        {/* Loading skeleton */}
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="border rounded-lg p-5 space-y-3">
+                <Skeleton className="h-5 w-2/3" />
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+            ))}
+          </div>
+        ) : projects.length === 0 ? (
+          /* Empty state */
+          <div className="text-center py-20 space-y-4">
+            <FolderOpen className="h-16 w-16 mx-auto text-muted-foreground/30" />
+            <div>
+              <p className="text-lg font-medium text-muted-foreground">No projects yet</p>
+              <p className="text-sm text-muted-foreground/70 mt-1">
+                Create your first project to get started.
+              </p>
+            </div>
+            <Button onClick={() => setShowCreate(true)} variant="outline">
+              <Plus className="h-4 w-4 mr-1.5" />
+              Create Project
+            </Button>
+          </div>
+        ) : (
+          /* Project grid */
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {projects.map((project) => (
+              <div
+                key={project.id}
+                onClick={() => navigate({ to: "/projects/$projectId", params: { projectId: String(project.id) } })}
+                className="group relative border rounded-lg p-5 hover:border-foreground/25 hover:shadow-sm transition-all cursor-pointer"
+              >
+                {/* Project name */}
+                <div className="flex items-start justify-between gap-2 mb-3">
+                  <h3 className="font-semibold text-base truncate">{project.name}</h3>
+                  <button
+                    onClick={(e) => handleDelete(e, project.id)}
+                    disabled={deletingId === project.id}
+                    className="opacity-0 group-hover:opacity-100 shrink-0 p-1 rounded hover:bg-destructive/10 hover:text-destructive text-muted-foreground transition-all"
+                    title="Delete project"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
 
-      {/* Scroll navigation buttons */}
-      {nodes.length > 0 && (
-        <div className="fixed right-4 bottom-24 z-30 flex flex-col gap-1">
-          <button
-            onClick={() => virtualizer.scrollToIndex(0, { align: "start" })}
-            className="flex items-center justify-center w-8 h-8 rounded-full bg-background/80 backdrop-blur-sm border shadow-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-            title="Jump to top"
-          >
-            <ChevronsUp className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => virtualizer.scrollToIndex(nodes.length - 1, { align: "end" })}
-            className="flex items-center justify-center w-8 h-8 rounded-full bg-background/80 backdrop-blur-sm border shadow-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-            title="Jump to bottom"
-          >
-            <ChevronsDown className="h-4 w-4" />
-          </button>
-        </div>
-      )}
+                {/* Stats */}
+                <div className="flex items-center gap-4 text-sm text-muted-foreground mb-3">
+                  <span className="flex items-center gap-1">
+                    <Layers className="h-3.5 w-3.5" />
+                    {project.nodeCount} node{project.nodeCount !== 1 ? "s" : ""}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <GitBranch className="h-3.5 w-3.5" />
+                    {project.branchCount} branch{project.branchCount !== 1 ? "es" : ""}
+                  </span>
+                </div>
+
+                {/* Date + arrow */}
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground/70">
+                    {formatDate(project.created_at)}
+                  </span>
+                  <ArrowRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-foreground transition-colors" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -12,13 +12,23 @@ export const db = new DatabaseSync(join(DATA_DIR, "data.db"));
 db.exec("PRAGMA journal_mode = WAL");
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content TEXT NOT NULL,
     parent_id INTEGER,
+    project_id INTEGER,
     order_val REAL NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (parent_id) REFERENCES nodes(id)
+    FOREIGN KEY (parent_id) REFERENCES nodes(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
   )
 `);
 
@@ -31,6 +41,37 @@ db.exec(`
 `);
 
 db.exec(`CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_nodes_project_id ON nodes(project_id)`);
+
+// ── Project helpers ─────────────────────────────────────────────────────────
+
+export function getProjects() {
+  return db.prepare(`
+    SELECT p.id, p.name, p.created_at,
+      (SELECT COUNT(*) FROM nodes n WHERE n.project_id = p.id) AS nodeCount,
+      (SELECT COUNT(*) FROM branches b JOIN nodes n ON b.leaf_id = n.id WHERE n.project_id = p.id) AS branchCount
+    FROM projects p
+    ORDER BY p.created_at DESC
+  `).all() as { id: number; name: string; created_at: string; nodeCount: number; branchCount: number }[];
+}
+
+export function createProject(name: string) {
+  const result = db.prepare("INSERT INTO projects (name) VALUES (?)").run(name);
+  return db.prepare("SELECT * FROM projects WHERE id = ?").get(result.lastInsertRowid) as any;
+}
+
+export function deleteProject(id: number) {
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM branches WHERE leaf_id IN (SELECT id FROM nodes WHERE project_id = ?)").run(id);
+    db.prepare("DELETE FROM nodes WHERE project_id = ?").run(id);
+    db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
 
 // ── Branch helpers ──────────────────────────────────────────────────────────
 
@@ -44,10 +85,17 @@ export function getNode(id: number) {
  * Returns { branchId (leaf node id), count (depth+1), preview (leaf content) }.
  * Path is NOT included — use getBranchPath(leafId) separately.
  */
-export function getBranchMeta() {
+export function getBranchMeta(projectId?: number | null) {
+  const projectFilter = projectId != null
+    ? "WHERE n.project_id = ?"
+    : "WHERE n.project_id IS NULL";
+  const rootFilter = projectId != null
+    ? "WHERE parent_id IS NULL AND project_id = ?"
+    : "WHERE parent_id IS NULL AND project_id IS NULL";
+
   const rows = db.prepare(`
     WITH RECURSIVE tree(id, depth) AS (
-      SELECT id, 0 FROM nodes WHERE parent_id IS NULL
+      SELECT id, 0 FROM nodes ${rootFilter}
       UNION ALL
       SELECT n.id, t.depth + 1
       FROM nodes n JOIN tree t ON n.parent_id = t.id
@@ -57,10 +105,12 @@ export function getBranchMeta() {
     JOIN nodes n ON n.id = t.id
     WHERE NOT EXISTS (SELECT 1 FROM nodes c WHERE c.parent_id = t.id)
     ORDER BY depth DESC
-  `).all() as { leafId: number; depth: number; content: string }[];
+  `).all(...(projectId != null ? [projectId] : [])) as { leafId: number; depth: number; content: string }[];
 
   if (rows.length === 0) {
-    const root = db.prepare("SELECT id, content FROM nodes WHERE parent_id IS NULL LIMIT 1").get() as any;
+    const root = db.prepare(
+      `SELECT id, content FROM nodes ${rootFilter} LIMIT 1`
+    ).get(...(projectId != null ? [projectId] : [])) as any;
     if (!root) return [];
     return [{ branchId: root.id, count: 1, preview: root.content }];
   }

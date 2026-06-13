@@ -1,5 +1,5 @@
 import { useEffect, useRef, useMemo, useCallback } from "react";
-import { Link2, Plus } from "lucide-react";
+import { Link2, Plus, ChevronsUp, ChevronsDown } from "lucide-react";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { useStore } from "../store/use-store";
 import { InsertNode } from "../components/insert-node";
@@ -209,6 +209,26 @@ export function Home() {
           <NodeInputBar inputRef={bottomInputRef} />
         </div>
       </div>
+
+      {/* Scroll navigation buttons */}
+      {nodes.length > 0 && (
+        <div className="fixed right-4 bottom-24 z-30 flex flex-col gap-1">
+          <button
+            onClick={() => virtualizer.scrollToIndex(0, { align: "start" })}
+            className="flex items-center justify-center w-8 h-8 rounded-full bg-background/80 backdrop-blur-sm border shadow-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            title="Jump to top"
+          >
+            <ChevronsUp className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => virtualizer.scrollToIndex(nodes.length - 1, { align: "end" })}
+            className="flex items-center justify-center w-8 h-8 rounded-full bg-background/80 backdrop-blur-sm border shadow-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            title="Jump to bottom"
+          >
+            <ChevronsDown className="h-4 w-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

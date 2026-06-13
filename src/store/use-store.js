@@ -161,7 +161,7 @@ export const useStore = create((set, get) => {
         send("branches:forks", { leafId }),
       ]);
       if (get()._nodesRequestId !== requestId) return;
-      set({ nodes, _forkNodeIds: new Set(forkIds) });
+      set({ nodes, _forkNodeIds: new Set(forkIds), _scrollToBottom: true });
     },
 
     /** Legacy selectPath — used by ForkPopover which passes a full path array. */

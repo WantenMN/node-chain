@@ -96,7 +96,7 @@ export const useStore = create((set, get) => {
 
     ws.onopen = () => {
       if (ws !== currentWs) return;
-      set({ connected: true });
+      set({ connected: true, _hasConnected: true });
       send("branches:list").then((data) => {
         set({
           branches: data,
@@ -134,6 +134,7 @@ export const useStore = create((set, get) => {
     input: "",
     loading: true,
     connected: false,
+    _hasConnected: false,
     _newBranchNodeId: null,
     _shouldFocusBottom: false,
     _skipLoadNodes: false,

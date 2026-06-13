@@ -1,5 +1,56 @@
 import { Link } from "@tanstack/react-router";
 import { Link2 } from "lucide-react";
+import { useStore } from "../store/use-store";
+import { cn } from "../lib/utils";
+
+const STATUS_LABELS = {
+  connected: "Connected",
+  connecting: "Connecting…",
+  disconnected: "Disconnected",
+};
+
+function ConnectionDot() {
+  const connected = useStore((s) => s.connected);
+  const hasConnected = useStore((s) => s._hasConnected);
+
+  const status = connected
+    ? "connected"
+    : hasConnected
+      ? "disconnected"
+      : "connecting";
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary/60">
+      <span className="relative flex h-2 w-2 shrink-0">
+        {status === "connected" && (
+          <span
+            className="absolute inset-0 rounded-full bg-green-500"
+            style={{ animation: "status-glow 2.5s ease-in-out infinite" }}
+          />
+        )}
+        <span
+          className={cn(
+            "relative inline-flex h-2 w-2 rounded-full",
+            status === "connected" && "bg-green-500",
+            status === "connecting" && "bg-yellow-500",
+            status === "disconnected" && "bg-red-500",
+          )}
+          style={{
+            animation:
+              status === "connected"
+                ? "breathe 2.5s ease-in-out infinite"
+                : status === "connecting"
+                  ? "breathe 1.2s ease-in-out infinite"
+                  : "breathe 2s ease-in-out infinite",
+          }}
+        />
+      </span>
+      <span className="text-xs font-medium text-muted-foreground">
+        {STATUS_LABELS[status]}
+      </span>
+    </div>
+  );
+}
 
 export function Navbar() {
   return (
@@ -9,6 +60,9 @@ export function Navbar() {
           <Link2 className="h-5 w-5" />
           <span>Node Chain</span>
         </Link>
+        <div className="ml-auto">
+          <ConnectionDot />
+        </div>
       </div>
     </header>
   );

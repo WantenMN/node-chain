@@ -63,14 +63,15 @@ function handleMessage(ws: WebSocket, raw: string) {
         break;
       }
       const rows = db.prepare(`
-        WITH RECURSIVE path(id, parent_id) AS (
-          SELECT id, parent_id FROM nodes WHERE id = ?
+        WITH RECURSIVE path(id, parent_id, child_count) AS (
+          SELECT n.id, n.parent_id, (SELECT COUNT(*) FROM nodes c WHERE c.parent_id = n.id)
+          FROM nodes n WHERE n.id = ?
           UNION ALL
-          SELECT n.id, n.parent_id FROM nodes n JOIN path p ON n.id = p.parent_id
+          SELECT n.id, n.parent_id, (SELECT COUNT(*) FROM nodes c WHERE c.parent_id = n.id)
+          FROM nodes n JOIN path p ON n.id = p.parent_id
         )
-        SELECT p.id FROM path p
-        WHERE p.parent_id IS NOT NULL
-          AND (SELECT COUNT(*) FROM nodes WHERE parent_id = p.id) > 1
+        SELECT id FROM path
+        WHERE parent_id IS NOT NULL AND child_count > 1
       `).all(leafId) as { id: number }[];
       send(ws, { action: "branches:forks", requestId, data: rows.map((r) => r.id) });
       break;
@@ -86,34 +87,48 @@ function handleMessage(ws: WebSocket, raw: string) {
       }
       const childIds = children.map((c) => c.id);
       const placeholders = childIds.map(() => "?").join(",");
-      const leafRows = db.prepare(`
-        WITH RECURSIVE subtree(child_id, current_id, path) AS (
-          SELECT id, id, CAST(id AS TEXT) FROM nodes WHERE id IN (${placeholders})
-          UNION ALL
-          SELECT s.child_id, n.id, s.path || ',' || CAST(n.id AS TEXT)
-          FROM subtree s JOIN nodes n ON n.parent_id = s.current_id
-        )
-        SELECT child_id, path FROM subtree s
-        WHERE s.current_id NOT IN (
-          SELECT DISTINCT parent_id FROM nodes WHERE parent_id IS NOT NULL
-        )
-      `).all(...childIds) as { child_id: number; path: string }[];
 
-      const pathMap = new Map<number, string[]>();
-      for (const row of leafRows) {
-        if (!pathMap.has(row.child_id)) pathMap.set(row.child_id, []);
-        pathMap.get(row.child_id)!.push(row.path);
-      }
+      const leafRows = db.prepare(`
+        WITH RECURSIVE walk(child_id, current_id, depth) AS (
+          SELECT id, id, 0 FROM nodes WHERE id IN (${placeholders})
+          UNION ALL
+          SELECT w.child_id, n.id, w.depth + 1
+          FROM walk w JOIN nodes n ON n.parent_id = w.current_id
+        )
+        SELECT child_id, current_id AS leaf_id, MAX(depth) AS max_depth
+        FROM walk w
+        WHERE NOT EXISTS (SELECT 1 FROM nodes n2 WHERE n2.parent_id = w.current_id)
+        GROUP BY child_id
+      `).all(...childIds) as { child_id: number; leaf_id: number; max_depth: number }[];
+
+      const leafMap = new Map(leafRows.map((r) => [r.child_id, r]));
 
       const result = children.map((child) => {
-        const rawPaths = pathMap.get(child.id) ?? [];
-        const branches = rawPaths.map((p) => {
-          const path = [nodeId, ...p.split(",").map(Number)];
-          return { path, count: path.length };
-        });
-        return { child, branches };
+        const leaf = leafMap.get(child.id);
+        if (!leaf) {
+          return { child, branches: [{ path: [nodeId, child.id], count: 2 }] };
+        }
+        const fullPath = getBranchPath(leaf.leaf_id);
+        const forkIdx = fullPath.indexOf(nodeId);
+        const subPath = forkIdx >= 0 ? fullPath.slice(forkIdx) : [nodeId, child.id];
+        return { child, branches: [{ path: subPath, count: subPath.length }] };
       });
       send(ws, { action: "branches:from", requestId, data: result });
+      break;
+    }
+
+    // ── All node IDs in a subtree (for bulk delete) ─────────────────────
+    case "branches:subtree": {
+      const { nodeId } = payload;
+      const rows = db.prepare(`
+        WITH RECURSIVE subtree(id) AS (
+          SELECT id FROM nodes WHERE id = ?
+          UNION ALL
+          SELECT n.id FROM nodes n JOIN subtree s ON n.parent_id = s.id
+        )
+        SELECT id FROM subtree
+      `).all(nodeId) as { id: number }[];
+      send(ws, { action: "branches:subtree", requestId, data: rows.map((r) => r.id) });
       break;
     }
 
@@ -270,10 +285,19 @@ function handleMessage(ws: WebSocket, raw: string) {
 
       db.exec("BEGIN");
       try {
-        const updateStmt = db.prepare("UPDATE nodes SET parent_id = ?, order_val = ? WHERE id = ?");
+        db.exec("CREATE TEMP TABLE IF NOT EXISTS _reorder (id INTEGER PRIMARY KEY, new_parent_id INTEGER, new_order_val REAL)");
+        db.exec("DELETE FROM _reorder");
+        const insertStmt = db.prepare("INSERT INTO _reorder VALUES (?, ?, ?)");
         for (let i = 0; i < ids.length; i++) {
-          updateStmt.run(i > 0 ? ids[i - 1] : rootParentId, i + 1, ids[i]);
+          insertStmt.run(ids[i], i > 0 ? ids[i - 1] : rootParentId, i + 1);
         }
+        db.exec(`
+          UPDATE nodes SET
+            parent_id = (SELECT r.new_parent_id FROM _reorder r WHERE r.id = nodes.id),
+            order_val = (SELECT r.new_order_val FROM _reorder r WHERE r.id = nodes.id)
+          WHERE nodes.id IN (SELECT id FROM _reorder)
+        `);
+        db.exec("DROP TABLE _reorder");
         db.exec("COMMIT");
       } catch (e) {
         db.exec("ROLLBACK");

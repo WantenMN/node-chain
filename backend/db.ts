@@ -55,7 +55,7 @@ export function getBranchMeta() {
     SELECT t.id AS leafId, t.depth, n.content
     FROM tree t
     JOIN nodes n ON n.id = t.id
-    WHERE t.id NOT IN (SELECT DISTINCT parent_id FROM nodes WHERE parent_id IS NOT NULL)
+    WHERE NOT EXISTS (SELECT 1 FROM nodes c WHERE c.parent_id = t.id)
     ORDER BY depth DESC
   `).all() as { leafId: number; depth: number; content: string }[];
 

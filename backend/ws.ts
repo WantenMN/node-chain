@@ -264,22 +264,20 @@ function handleMessage(ws: WebSocket, raw: string) {
       }
 
       const ids = path as number[];
-      const placeholders = ids.map(() => "?").join(",");
-      const currentNodes = db.prepare(
-        `SELECT id, parent_id, order_val FROM nodes WHERE id IN (${placeholders})`
-      ).all(...ids) as { id: number; parent_id: number | null; order_val: number }[];
 
-      const currentMap = new Map(currentNodes.map((n) => [n.id, n]));
-      const rootParentId = currentMap.get(ids[0])?.parent_id ?? null;
+      const firstNode = db.prepare("SELECT parent_id FROM nodes WHERE id = ?").get(ids[0]) as { parent_id: number | null } | undefined;
+      const rootParentId = firstNode?.parent_id ?? null;
 
-      const updateStmt = db.prepare("UPDATE nodes SET parent_id = ?, order_val = ? WHERE id = ?");
-      for (let i = 0; i < ids.length; i++) {
-        const nodeId = ids[i];
-        const expectedParent = i > 0 ? ids[i - 1] : rootParentId;
-        const current = currentMap.get(nodeId);
-        if (!current || current.parent_id !== expectedParent) {
-          updateStmt.run(expectedParent, i + 1, nodeId);
+      db.exec("BEGIN");
+      try {
+        const updateStmt = db.prepare("UPDATE nodes SET parent_id = ?, order_val = ? WHERE id = ?");
+        for (let i = 0; i < ids.length; i++) {
+          updateStmt.run(i > 0 ? ids[i - 1] : rootParentId, i + 1, ids[i]);
         }
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
       }
 
       send(ws, { action: "nodes:reorder", requestId, data: { ok: true } });

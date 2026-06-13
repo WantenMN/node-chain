@@ -145,18 +145,19 @@ export function NodeCard({ node, index, isFork }) {
       >
         {/* Rail column: dot aligned to first line of text */}
         <div className="relative w-8 shrink-0">
+          {/* Dot — opaque, covers the continuous line behind */}
           <div
-            className="absolute z-10"
-            style={{ left: 16, top: 22, transform: "translate(-50%, -50%)" }}
+            className="absolute"
+            style={{ left: 16, top: 22, transform: "translate(-50%, -50%)", zIndex: 10 }}
           >
             <div
               className={`w-3 h-3 rounded-full border-2 transition-all duration-200 ${
                 isDragging
                   ? "border-muted-foreground/30 bg-muted scale-75 opacity-50"
                   : isDropTarget
-                    ? "border-timeline-active bg-timeline-active/20 scale-110"
+                    ? "border-timeline-active bg-white scale-110"
                     : isFork
-                      ? "border-timeline-fork bg-timeline-fork/20"
+                      ? "border-timeline-fork bg-white"
                       : hovered
                         ? "border-timeline-dot-hover bg-white scale-110"
                         : "border-timeline-dot bg-white"

@@ -133,12 +133,12 @@ export function Home() {
               <p className="text-muted-foreground">No nodes yet. Type below to start a chain.</p>
             </div>
           ) : (
-            /* Timeline container — the single continuous line is drawn here */
+            /* Timeline container */
             <div className="relative">
-              {/* The continuous vertical line */}
+              {/* Continuous line — behind everything */}
               <div
                 className="absolute top-0 bottom-0 w-px bg-timeline pointer-events-none"
-                style={{ left: 16 }}
+                style={{ left: 16, zIndex: 0 }}
               />
 
               <TopDropZone />
@@ -160,7 +160,7 @@ export function Home() {
                 </div>
               ))}
 
-              {/* Tail line extension */}
+              {/* Tail space */}
               <div className="h-8" />
             </div>
           )}

@@ -45,7 +45,7 @@ export function getPathFromLeaf(leafId: number): number[] {
 }
 
 export function getAllBranches() {
-  const allNodes = db.prepare("SELECT id, parent_id FROM nodes").all() as any[];
+  const allNodes = db.prepare("SELECT id, parent_id, content FROM nodes").all() as any[];
   if (allNodes.length === 0) return [];
 
   const parentIds = new Set(allNodes.map((n) => n.parent_id).filter(Boolean));
@@ -83,12 +83,11 @@ export function getAllBranches() {
 
   return leaves.map((leaf) => {
     const path = getPathFromLeaf(leaf.id);
-    const firstNode = getNode(path[0]);
     return {
       branchId: branchIdMap.get(leaf.id),
       path,
       count: path.length,
-      preview: firstNode?.content ?? "",
+      preview: leaf.content ?? "",
     };
   }).sort((a, b) => b.count - a.count);
 }

@@ -124,16 +124,16 @@ export function InsertNode({ prevNode, nextNode, beforeCreate }) {
       onMouseLeave={() => setHovered(false)}
       onClick={() => { if (!isDragging) setActive(true); }}
     >
-      {/* Plus icon on the timeline — purely visual */}
+      {/* Plus icon on the timeline — opaque background covers the continuous line */}
       {!isDragging && (
         <div
-          className="absolute pointer-events-none z-10"
-          style={{ left: 16, top: "50%", transform: "translate(-50%, -50%)" }}
+          className="absolute pointer-events-none"
+          style={{ left: 16, top: "50%", transform: "translate(-50%, -50%)", zIndex: 10 }}
         >
           <div
             className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all duration-150 ${
               hovered
-                ? "border-timeline-active bg-timeline-active/10 scale-100"
+                ? "border-timeline-active bg-white scale-100 shadow-sm"
                 : "border-transparent bg-transparent scale-75"
             }`}
           >

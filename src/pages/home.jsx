@@ -203,11 +203,9 @@ export function Home() {
         </div>
       </div>
 
-      {/* Fixed bottom input bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-40">
-        <div className="md:ml-64">
-          <NodeInputBar inputRef={bottomInputRef} />
-        </div>
+      {/* Fixed bottom input bar — content area only */}
+      <div className="fixed bottom-0 left-0 md:left-64 right-0 z-40">
+        <NodeInputBar inputRef={bottomInputRef} />
       </div>
 
       {/* Scroll navigation buttons */}

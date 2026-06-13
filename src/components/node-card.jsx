@@ -1,9 +1,16 @@
 import { useState, useRef, useEffect } from "react";
-import { GitFork, GripVertical, Pencil, Trash2 } from "lucide-react";
+import { GitFork, GripVertical, MoreHorizontal, Pencil, Trash2, Trash } from "lucide-react";
 import { useStore } from "../store/use-store";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { Popover, PopoverHeader, PopoverTitle, PopoverDescription } from "./ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "./ui/dropdown-menu";
 import { useDrag } from "../lib/use-drag";
 
 function ForkPopover({ nodeId, selectedPath, onSelectBranch, open, onOpenChange, anchorEl }) {
@@ -83,6 +90,7 @@ function ForkPopover({ nodeId, selectedPath, onSelectBranch, open, onOpenChange,
 
 export function NodeCard({ node, index, isFork }) {
   const deleteNode = useStore((s) => s.deleteNode);
+  const deleteNodeWithChildren = useStore((s) => s.deleteNodeWithChildren);
   const updateNode = useStore((s) => s.updateNode);
   const selectPath = useStore((s) => s.selectPath);
   const selectedPath = useStore((s) => s.selectedPath);
@@ -235,16 +243,33 @@ export function NodeCard({ node, index, isFork }) {
                 >
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => deleteNode(node.id)}
-                  title="Delete node"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      onMouseDown={(e) => e.preventDefault()}
+                      title="More actions"
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => deleteNode(node.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete node
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => deleteNodeWithChildren(node.id)}
+                    >
+                      <Trash className="h-3.5 w-3.5" />
+                      Delete with children
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <div
                   className="flex items-center justify-center h-7 w-7 cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground rounded-md hover:bg-accent transition-colors"
                   title="Drag to reorder"
@@ -268,6 +293,7 @@ export function NodeCard({ node, index, isFork }) {
           anchorEl={forkAnchorEl}
         />
       )}
+
     </>
   );
 }

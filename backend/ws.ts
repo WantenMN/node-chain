@@ -150,27 +150,30 @@ function handleMessage(ws: any, raw: string) {
     }
 
     case "nodes:reorder": {
-      const { id, beforeId } = payload;
-
-      // Get current path ordered by order_val, excluding dragged node
-      const pathNodes = db.prepare(
-        "SELECT id FROM nodes WHERE id != ? ORDER BY order_val ASC"
-      ).all(id) as any[];
-
-      // Insert dragged node at the target position
-      if (beforeId != null) {
-        const idx = pathNodes.findIndex((n) => n.id === beforeId);
-        if (idx >= 0) pathNodes.splice(idx, 0, { id });
-        else pathNodes.push({ id });
-      } else {
-        pathNodes.push({ id });
+      const { path } = payload;
+      if (!path || !Array.isArray(path)) {
+        send(ws, { action: "nodes:reorder", requestId, error: "Path is required" });
+        break;
       }
 
-      // Reassign order_val and parent_id chain sequentially
-      for (let i = 0; i < pathNodes.length; i++) {
-        const parentId = i > 0 ? pathNodes[i - 1].id : null;
-        db.prepare("UPDATE nodes SET order_val = ?, parent_id = ? WHERE id = ?")
-          .run(i + 1, parentId, pathNodes[i].id);
+      // If the path is empty, there's nothing to do.
+      if (path.length === 0) {
+        send(ws, { action: "nodes:reorder", requestId, data: { ok: true } });
+        break;
+      }
+
+      // Find the original parent of the first node in the path to anchor the chain.
+      const firstNode = db.prepare("SELECT parent_id FROM nodes WHERE id = ?").get(path[0]) as { parent_id: number | null };
+      const rootParentId = firstNode?.parent_id ?? null;
+
+      // Re-chain only the nodes within the provided path, preserving their new order.
+      // This surgically updates one branch without affecting any others.
+      for (let i = 0; i < path.length; i++) {
+        const nodeId = path[i];
+        const parentId = i > 0 ? path[i - 1] : rootParentId;
+        // Use fractional ordering to be more robust, but sequential is fine for a full path update.
+        db.prepare("UPDATE nodes SET parent_id = ?, order_val = ? WHERE id = ?")
+          .run(parentId, i + 1, nodeId);
       }
 
       send(ws, { action: "nodes:reorder", requestId, data: { ok: true } });

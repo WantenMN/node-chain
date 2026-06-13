@@ -54,7 +54,25 @@ export const useStore = create((set, get) => {
             newPath = longer.length > 0 ? longer[0].path : newPath;
           } else {
             const supersets = newBranches.filter((b) => pathStartsWith(b.path, newPath));
-            newPath = supersets.length > 0 ? supersets[0].path : newBranches[0]?.path ?? newPath;
+            if (supersets.length > 0) {
+              newPath = supersets[0].path;
+            } else {
+              // Find branch with longest common prefix (handles node deletion)
+              let best = null;
+              let bestLen = 0;
+              for (const b of newBranches) {
+                let common = 0;
+                for (let i = 0; i < b.path.length && i < newPath.length; i++) {
+                  if (b.path[i] === newPath[i]) common++;
+                  else break;
+                }
+                if (common > bestLen) {
+                  bestLen = common;
+                  best = b;
+                }
+              }
+              newPath = best ? best.path : newBranches[0]?.path ?? newPath;
+            }
           }
         }
 
@@ -215,6 +233,50 @@ export const useStore = create((set, get) => {
       }
     },
 
+    deleteNodeWithChildren: async (id) => {
+      const prev = get().nodes;
+      const prevPath = get().selectedPath;
+
+      // Collect descendant node IDs from child branches (only nodes AFTER the target)
+      const idsToDelete = new Set([id]);
+      try {
+        const childBranches = await send("branches:from", { nodeId: id });
+        for (const { branches } of childBranches) {
+          for (const branch of branches) {
+            const forkIdx = branch.path.indexOf(id);
+            const start = forkIdx >= 0 ? forkIdx + 1 : 0;
+            for (let i = start; i < branch.path.length; i++) {
+              idsToDelete.add(branch.path[i]);
+            }
+          }
+        }
+      } catch {
+        // If branches:from fails, fall back to deleting from current path
+      }
+
+      // Also collect nodes after this one in the current path
+      const idx = prevPath.indexOf(id);
+      if (idx >= 0) {
+        for (let i = idx + 1; i < prevPath.length; i++) {
+          idsToDelete.add(prevPath[i]);
+        }
+      }
+
+      // Optimistic update: remove all collected nodes and truncate path
+      const newPath = idx >= 0 ? prevPath.slice(0, idx) : prevPath;
+      set({
+        nodes: prev.filter((n) => !idsToDelete.has(n.id)),
+        selectedPath: newPath,
+      });
+
+      // Send deletes to server
+      try {
+        await Promise.all([...idsToDelete].map((nid) => send("nodes:delete", { id: nid })));
+      } catch {
+        set({ nodes: prev, selectedPath: prevPath });
+      }
+    },
+
     updateNode: async (id, content) => {
       const prev = get().nodes;
       set((s) => ({
@@ -235,25 +297,35 @@ export const useStore = create((set, get) => {
     },
 
     moveNode: async (nodeId, beforeId) => {
-      const prev = get().nodes;
-      set((s) => {
-        const dragIdx = s.nodes.findIndex((n) => n.id === nodeId);
-        if (dragIdx < 0) return s;
-        const dragged = s.nodes[dragIdx];
-        const without = s.nodes.filter((n) => n.id !== nodeId);
-        if (beforeId != null) {
-          const targetIdx = without.findIndex((n) => n.id === beforeId);
-          const newNodes = [...without];
-          newNodes.splice(targetIdx, 0, dragged);
-          return { nodes: newNodes };
-        } else {
-          return { nodes: [...without, dragged] };
-        }
-      });
+      const prevNodes = get().nodes;
+      const prevPath = get().selectedPath;
+
+      // Calculate the new nodes and new path
+      const dragIdx = prevNodes.findIndex((n) => n.id === nodeId);
+      if (dragIdx < 0) return;
+
+      const dragged = prevNodes[dragIdx];
+      const without = prevNodes.filter((n) => n.id !== nodeId);
+      let newNodes;
+      if (beforeId != null) {
+        const targetIdx = without.findIndex((n) => n.id === beforeId);
+        newNodes = [...without];
+        if (targetIdx >= 0) newNodes.splice(targetIdx, 0, dragged);
+        else newNodes.push(dragged); // Fallback if target not found
+      } else {
+        newNodes = [...without, dragged];
+      }
+      const newPath = newNodes.map((n) => n.id);
+
+      // Optimistic update with new path
+      set({ nodes: newNodes, selectedPath: newPath, _skipLoadNodes: true });
+
       try {
-        await send("nodes:reorder", { id: nodeId, beforeId });
+        // Send the NEW path to the server
+        await send("nodes:reorder", { id: nodeId, beforeId, path: newPath });
       } catch {
-        set({ nodes: prev });
+        // Revert both nodes and path
+        set({ nodes: prevNodes, selectedPath: prevPath });
       }
     },
 

@@ -237,7 +237,13 @@ function handleMessage(ws: WebSocket, raw: string) {
         for (const id of ids) insertStmt.run(id);
         db.exec(`
           UPDATE nodes SET parent_id = (
-            SELECT p.parent_id FROM nodes p WHERE p.id = nodes.parent_id
+            WITH RECURSIVE walk(pid) AS (
+              SELECT nodes.parent_id
+              UNION ALL
+              SELECT n.parent_id FROM nodes n JOIN walk w ON n.id = w.pid
+              WHERE w.pid IN (SELECT id FROM _delete_ids)
+            )
+            SELECT pid FROM walk WHERE pid NOT IN (SELECT id FROM _delete_ids) LIMIT 1
           )
           WHERE parent_id IN (SELECT id FROM _delete_ids) AND id NOT IN (SELECT id FROM _delete_ids)
         `);

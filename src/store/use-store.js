@@ -139,6 +139,8 @@ export const useStore = create((set, get) => {
     _skipLoadNodes: false,
     _submitting: false,
     _scrollToBottom: false,
+    _draggedNodeId: null,
+    _hoveredNodeId: null,
 
     // Actions
     connect,
@@ -187,6 +189,31 @@ export const useStore = create((set, get) => {
     deleteNode: async (id) => {
       set((s) => ({ nodes: s.nodes.filter((n) => n.id !== id) }));
       await send("nodes:delete", { id });
+    },
+
+    updateNode: async (id, content) => {
+      set((s) => ({
+        nodes: s.nodes.map((n) => n.id === id ? { ...n, content } : n),
+      }));
+      await send("nodes:update", { id, content });
+    },
+
+    moveNode: async (nodeId, beforeId) => {
+      set((s) => {
+        const dragIdx = s.nodes.findIndex((n) => n.id === nodeId);
+        if (dragIdx < 0) return s;
+        const dragged = s.nodes[dragIdx];
+        const without = s.nodes.filter((n) => n.id !== nodeId);
+        if (beforeId != null) {
+          const targetIdx = without.findIndex((n) => n.id === beforeId);
+          const newNodes = [...without];
+          newNodes.splice(targetIdx, 0, dragged);
+          return { nodes: newNodes };
+        } else {
+          return { nodes: [...without, dragged] };
+        }
+      });
+      await send("nodes:reorder", { id: nodeId, beforeId });
     },
 
     setInput: (value) => set({ input: value }),

@@ -4,13 +4,30 @@ import { useStore } from "../store/use-store";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
-export function InsertNode({ prevNode, beforeCreate }) {
+export function InsertNode({ prevNode, nextNode, beforeCreate }) {
   const connected = useStore((s) => s.connected);
   const createNode = useStore((s) => s.createNode);
+  const moveNode = useStore((s) => s.moveNode);
+  const hoveredNodeId = useStore((s) => s._hoveredNodeId);
+  const draggedNodeId = useStore((s) => s._draggedNodeId);
+  const nodes = useStore((s) => s.nodes);
 
   const [active, setActive] = useState(false);
   const [text, setText] = useState("");
   const wrapperRef = useRef(null);
+
+  // Determine direction by comparing dragged and hovered positions in the list
+  const showDropIndicator = (() => {
+    if (hoveredNodeId == null || draggedNodeId == null) return false;
+    if (hoveredNodeId === draggedNodeId) return false;
+    const dragIdx = nodes.findIndex((n) => n.id === draggedNodeId);
+    const hoverIdx = nodes.findIndex((n) => n.id === hoveredNodeId);
+    if (dragIdx < 0 || hoverIdx < 0) return false;
+    // Dragging down (dragIdx < hoverIdx): indicator below hovered → this gap if prevNode is hovered
+    // Dragging up (dragIdx > hoverIdx): indicator above hovered → this gap if nextNode is hovered
+    return (dragIdx < hoverIdx && prevNode?.id === hoveredNodeId) ||
+           (dragIdx > hoverIdx && nextNode?.id === hoveredNodeId);
+  })();
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -57,6 +74,14 @@ export function InsertNode({ prevNode, beforeCreate }) {
     }
   }
 
+  // Drop handling
+  function handleDrop(e) {
+    e.preventDefault();
+    useStore.setState({ _dropTarget: null, _draggedNodeId: null });
+    const draggedId = Number(e.dataTransfer.getData("text/plain"));
+    moveNode(draggedId, nextNode?.id ?? null);
+  }
+
   if (active) {
     return (
       <div ref={wrapperRef} className="flex flex-col items-center py-2">
@@ -87,6 +112,18 @@ export function InsertNode({ prevNode, beforeCreate }) {
           </div>
         </div>
         <ArrowDown className="h-4 w-4 text-muted-foreground/30" />
+      </div>
+    );
+  }
+
+  if (showDropIndicator) {
+    return (
+      <div
+        className="flex items-center justify-center h-10 rounded-lg border-2 border-dashed border-primary bg-primary/5 mx-4"
+        onDrop={handleDrop}
+      >
+        <Plus className="h-4 w-4 text-primary" />
+        <span className="text-xs text-primary font-medium ml-1.5">Insert here</span>
       </div>
     );
   }

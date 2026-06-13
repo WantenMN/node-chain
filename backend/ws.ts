@@ -129,9 +129,51 @@ function handleMessage(ws: any, raw: string) {
       const node = db.prepare("SELECT parent_id FROM nodes WHERE id = ?").get(id) as { parent_id: number | null } | undefined;
       const grandparentId = node?.parent_id ?? null;
       db.prepare("UPDATE nodes SET parent_id = ? WHERE parent_id = ?").run(grandparentId, id);
+      db.prepare("DELETE FROM branches WHERE leaf_id = ?").run(id);
       db.prepare("DELETE FROM nodes WHERE id = ?").run(id);
       send(ws, { action: "nodes:delete", requestId, data: { ok: true } });
       broadcast({ action: "nodes:deleted", data: { id } }, ws);
+
+      const branches = getAllBranches();
+      send(ws, { action: "branches:list", data: branches });
+      broadcast({ action: "branches:list", data: branches }, ws);
+      break;
+    }
+
+    case "nodes:update": {
+      const { id, content } = payload;
+      db.prepare("UPDATE nodes SET content = ? WHERE id = ?").run(content, id);
+      const updated = getNode(id);
+      send(ws, { action: "nodes:update", requestId, data: updated });
+      broadcast({ action: "nodes:updated", data: updated }, ws);
+      break;
+    }
+
+    case "nodes:reorder": {
+      const { id, beforeId } = payload;
+
+      // Get current path ordered by order_val, excluding dragged node
+      const pathNodes = db.prepare(
+        "SELECT id FROM nodes WHERE id != ? ORDER BY order_val ASC"
+      ).all(id) as any[];
+
+      // Insert dragged node at the target position
+      if (beforeId != null) {
+        const idx = pathNodes.findIndex((n) => n.id === beforeId);
+        if (idx >= 0) pathNodes.splice(idx, 0, { id });
+        else pathNodes.push({ id });
+      } else {
+        pathNodes.push({ id });
+      }
+
+      // Reassign order_val and parent_id chain sequentially
+      for (let i = 0; i < pathNodes.length; i++) {
+        const parentId = i > 0 ? pathNodes[i - 1].id : null;
+        db.prepare("UPDATE nodes SET order_val = ?, parent_id = ? WHERE id = ?")
+          .run(i + 1, parentId, pathNodes[i].id);
+      }
+
+      send(ws, { action: "nodes:reorder", requestId, data: { ok: true } });
 
       const branches = getAllBranches();
       send(ws, { action: "branches:list", data: branches });

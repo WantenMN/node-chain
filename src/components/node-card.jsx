@@ -163,12 +163,6 @@ export function NodeCard({ node, index, isFork }) {
                         : "border-timeline-dot bg-white"
               }`}
             >
-              {hovered && !editing && !isDragging && (
-                <span
-                  className="absolute inset-0 rounded-full bg-timeline-dot-hover/30"
-                  style={{ animation: "dot-pulse 1.5s ease-in-out infinite" }}
-                />
-              )}
             </div>
           </div>
         </div>

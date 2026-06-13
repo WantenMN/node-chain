@@ -53,10 +53,16 @@ export function Home() {
   const getForkPoints = useStore((s) => s.getForkPoints);
   const forkNodeIds = useStore((s) => s._forkNodeIds);
 
-  // Virtualizer — only renders nodes visible in the viewport
+  // Virtualizer — only renders nodes visible in the viewport.
+  // Chromium caps element height at ~33,554,432px. With 72px estimate,
+  // ~466k nodes is the limit before clipping. Scale estimate dynamically.
+  const MAX_CONTAINER_HEIGHT = 33554432;
   const virtualizer = useWindowVirtualizer({
     count: nodes.length,
-    estimateSize: useCallback(() => 72, []),
+    estimateSize: useCallback(() => {
+      const maxEstimate = Math.floor(MAX_CONTAINER_HEIGHT / Math.max(nodes.length, 1));
+      return Math.min(72, maxEstimate);
+    }, [nodes.length]),
     overscan: 5,
     measureElement: useCallback((el) => el.getBoundingClientRect().height, []),
     getItemKey: useCallback((index) => nodes[index]?.id ?? index, [nodes]),

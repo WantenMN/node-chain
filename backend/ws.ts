@@ -156,31 +156,37 @@ function handleMessage(ws: any, raw: string) {
         break;
       }
 
-      // If the path is empty, there's nothing to do.
       if (path.length === 0) {
         send(ws, { action: "nodes:reorder", requestId, data: { ok: true } });
         break;
       }
 
-      // Find the original parent of the first node in the path to anchor the chain.
-      const firstNode = db.prepare("SELECT parent_id FROM nodes WHERE id = ?").get(path[0]) as { parent_id: number | null };
-      const rootParentId = firstNode?.parent_id ?? null;
+      // Only UPDATE nodes whose parent actually changed (typically just 2-3 nodes).
+      // Fetch current parents in one query instead of N separate queries.
+      const ids = path as number[];
+      const placeholders = ids.map(() => "?").join(",");
+      const currentNodes = db.prepare(
+        `SELECT id, parent_id, order_val FROM nodes WHERE id IN (${placeholders})`
+      ).all(...ids) as { id: number; parent_id: number | null; order_val: number }[];
 
-      // Re-chain only the nodes within the provided path, preserving their new order.
-      // This surgically updates one branch without affecting any others.
-      for (let i = 0; i < path.length; i++) {
-        const nodeId = path[i];
-        const parentId = i > 0 ? path[i - 1] : rootParentId;
-        // Use fractional ordering to be more robust, but sequential is fine for a full path update.
-        db.prepare("UPDATE nodes SET parent_id = ?, order_val = ? WHERE id = ?")
-          .run(parentId, i + 1, nodeId);
+      const currentMap = new Map(currentNodes.map((n) => [n.id, n]));
+      const rootParentId = currentMap.get(ids[0])?.parent_id ?? null;
+
+      const updateStmt = db.prepare("UPDATE nodes SET parent_id = ?, order_val = ? WHERE id = ?");
+      for (let i = 0; i < ids.length; i++) {
+        const nodeId = ids[i];
+        const expectedParent = i > 0 ? ids[i - 1] : rootParentId;
+        const current = currentMap.get(nodeId);
+        // Only update if parent actually changed
+        if (!current || current.parent_id !== expectedParent) {
+          updateStmt.run(expectedParent, i + 1, nodeId);
+        }
       }
 
       send(ws, { action: "nodes:reorder", requestId, data: { ok: true } });
 
-      const branches = getAllBranches();
-      send(ws, { action: "branches:list", data: branches });
-      broadcast({ action: "branches:list", data: branches }, ws);
+      // Reorder doesn't change branch structure — skip expensive getAllBranches broadcast.
+      // The requesting client already has the correct path from its optimistic update.
       break;
     }
   }

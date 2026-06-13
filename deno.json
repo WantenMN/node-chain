@@ -4,6 +4,7 @@
     "dev:frontend": "deno run -A npm:vite",
     "dev:backend": "deno run -A backend/main.ts --dev",
     "build": "deno run -A npm:vite build",
-    "start": "deno task build && deno run -A backend/main.ts"
+    "start": "deno task build && deno run -A backend/main.ts",
+    "generate-nodes": "deno run --allow-read --allow-write --allow-env backend/generate_nodes.ts"
   }
 }

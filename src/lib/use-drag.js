@@ -57,60 +57,67 @@ export function useDrag() {
         ds.ghost.style.top = ev.clientY + "px";
       }
 
-      // Find drop target
-      if (ds.ghost) ds.ghost.style.display = "none";
-      const el = document.elementFromPoint(ev.clientX, ev.clientY);
-      if (ds.ghost) ds.ghost.style.display = "";
-
-      // Walk up to find a [data-drop-*] attribute
-      let target = el;
-      let targetNodeId = null;
-      let targetInsert = null;
-      while (target && target !== document.body) {
-        if (target.dataset.dropNode) {
-          targetNodeId = Number(target.dataset.dropNode);
-          break;
-        }
-        if (target.dataset.dropInsert) {
-          targetInsert = target.dataset.dropInsert;
-          break;
-        }
-        target = target.parentElement;
-      }
-
-      // Determine which node to highlight as the drop target
+      // Find drop target via zone-based hit testing
       const nodes = useStore.getState().nodes;
       const prev = useStore.getState()._hoveredNodeId;
-      let newHover = prev; // keep previous by default
+      let newHover = prev;
 
-      if (targetNodeId !== null && targetNodeId !== ds.nodeId) {
-        // Cursor is over a NodeCard
-        newHover = targetNodeId;
-      } else if (targetInsert === "top") {
-        // Cursor is at the top drop zone → target first node
-        newHover = nodes[0]?.id ?? null;
-      } else if (targetInsert === "gap") {
-        // Cursor is in the gap between two nodes.
-        // The gap element is inside a wrapper div with data-node-index.
-        // The gap between nodes[i-1] and nodes[i] is inside wrapper[i].
-        const gapEl = target;
-        const wrapper = gapEl.closest("[data-node-index]");
-        if (wrapper) {
-          const nodeIdx = Number(wrapper.dataset.nodeIndex);
-          // Gap is between nodes[nodeIdx-1] and nodes[nodeIdx]
-          // Use cursor Y to decide which node to target
-          const gapRect = gapEl.getBoundingClientRect();
-          const midY = gapRect.top + Math.max(gapRect.height, 20) / 2;
-          if (ev.clientY < midY) {
-            // Top half → target the node above the gap
-            newHover = nodes[nodeIdx - 1]?.id ?? prev;
+      const wrappers = document.querySelectorAll("[data-node-index]");
+      const rects = [];
+      wrappers.forEach(el => {
+        const idx = Number(el.dataset.nodeIndex);
+        const node = nodes[idx];
+        if (node) rects.push({ id: node.id, rect: el.getBoundingClientRect() });
+      });
+
+      const dragRectIdx = rects.findIndex(r => r.id === ds.nodeId);
+
+      if (dragRectIdx >= 0) {
+        let found = false;
+        for (let i = 0; i < rects.length; i++) {
+          if (i === dragRectIdx) continue;
+          const { id, rect } = rects[i];
+          let zoneTop, zoneBottom;
+
+          if (i < dragRectIdx) {
+            if (i === dragRectIdx - 1) {
+              zoneTop = rect.top;
+              zoneBottom = rect.bottom;
+            } else {
+              const gapBelow = rects[i + 1].rect.top - rect.bottom;
+              zoneTop = rect.top;
+              zoneBottom = rect.bottom + gapBelow;
+            }
           } else {
-            // Bottom half → target the node below the gap
-            newHover = nodes[nodeIdx]?.id ?? prev;
+            if (i === dragRectIdx + 1) {
+              zoneTop = rect.top;
+              zoneBottom = rect.bottom;
+            } else {
+              const gapAbove = rect.top - rects[i - 1].rect.bottom;
+              zoneTop = rect.top - gapAbove;
+              zoneBottom = rect.bottom;
+            }
+          }
+
+          if (ev.clientY >= zoneTop && ev.clientY < zoneBottom) {
+            newHover = id;
+            found = true;
+            break;
           }
         }
+
+        if (!found && dragRectIdx > 0 && ev.clientY < rects[0].rect.top) {
+          newHover = rects[0].id;
+          found = true;
+        }
+
+        if (!found && dragRectIdx < rects.length - 1 && ev.clientY >= rects[rects.length - 1].rect.bottom) {
+          newHover = rects[rects.length - 1].id;
+          found = true;
+        }
+
+        if (!found) newHover = null;
       }
-      // else: cursor is outside any valid zone → keep previous hover (don't clear)
 
       if (newHover !== prev) {
         useStore.setState({ _hoveredNodeId: newHover });

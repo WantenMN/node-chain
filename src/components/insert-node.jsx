@@ -137,7 +137,7 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
       {!isDragging && (
         <div
           className="absolute pointer-events-none"
-          style={{ left: 16, top: "50%", transform: "translate(-50%, -50%)", zIndex: 10 }}
+          style={{ left: 56, top: "50%", transform: "translate(-50%, -50%)", zIndex: 10 }}
         >
           <div
             className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all duration-150 ${

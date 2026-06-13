@@ -229,18 +229,21 @@ function handleMessage(ws: WebSocket, raw: string) {
         break;
       }
 
-      const placeholders = ids.map(() => "?").join(",");
-
       db.exec("BEGIN");
       try {
-        db.prepare(`
+        db.exec("CREATE TEMP TABLE IF NOT EXISTS _delete_ids (id INTEGER PRIMARY KEY)");
+        db.exec("DELETE FROM _delete_ids");
+        const insertStmt = db.prepare("INSERT INTO _delete_ids VALUES (?)");
+        for (const id of ids) insertStmt.run(id);
+        db.exec(`
           UPDATE nodes SET parent_id = (
             SELECT p.parent_id FROM nodes p WHERE p.id = nodes.parent_id
           )
-          WHERE parent_id IN (${placeholders}) AND id NOT IN (${placeholders})
-        `).run(...ids, ...ids);
-        db.prepare(`DELETE FROM branches WHERE leaf_id IN (${placeholders})`).run(...ids);
-        db.prepare(`DELETE FROM nodes WHERE id IN (${placeholders})`).run(...ids);
+          WHERE parent_id IN (SELECT id FROM _delete_ids) AND id NOT IN (SELECT id FROM _delete_ids)
+        `);
+        db.exec(`DELETE FROM branches WHERE leaf_id IN (SELECT id FROM _delete_ids)`);
+        db.exec(`DELETE FROM nodes WHERE id IN (SELECT id FROM _delete_ids)`);
+        db.exec("DROP TABLE _delete_ids");
         db.exec("COMMIT");
       } catch (e) {
         db.exec("ROLLBACK");

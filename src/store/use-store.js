@@ -245,35 +245,22 @@ export const useStore = create((set, get) => {
       const prev = get().nodes;
       const prevPath = get().selectedPath;
 
-      const idsToDelete = new Set([id]);
+      let idsToDelete;
       try {
-        const childBranches = await send("branches:from", { nodeId: id });
-        for (const { branches } of childBranches) {
-          for (const branch of branches) {
-            const forkIdx = branch.path.indexOf(id);
-            const start = forkIdx >= 0 ? forkIdx + 1 : 0;
-            for (let i = start; i < branch.path.length; i++) {
-              idsToDelete.add(branch.path[i]);
-            }
-          }
-        }
-      } catch {}
-
-      const idx = prevPath.indexOf(id);
-      if (idx >= 0) {
-        for (let i = idx + 1; i < prevPath.length; i++) {
-          idsToDelete.add(prevPath[i]);
-        }
+        idsToDelete = await send("branches:subtree", { nodeId: id });
+      } catch {
+        return;
       }
 
-      const newPath = idx >= 0 ? prevPath.slice(0, idx) : prevPath;
+      const idsSet = new Set(idsToDelete);
+      const newPath = prevPath.filter((nid) => !idsSet.has(nid));
       set({
-        nodes: prev.filter((n) => !idsToDelete.has(n.id)),
+        nodes: prev.filter((n) => !idsSet.has(n.id)),
         selectedPath: newPath,
       });
 
       try {
-        await send("nodes:delete_batch", { ids: [...idsToDelete] });
+        await send("nodes:delete_batch", { ids: idsToDelete });
       } catch {
         set({ nodes: prev, selectedPath: prevPath });
       }

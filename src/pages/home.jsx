@@ -59,6 +59,7 @@ export function Home() {
     estimateSize: useCallback(() => 72, []),
     overscan: 5,
     measureElement: useCallback((el) => el.getBoundingClientRect().height, []),
+    getItemKey: useCallback((index) => nodes[index]?.id ?? index, [nodes]),
   });
 
   // Connect WebSocket on mount

@@ -192,21 +192,18 @@ export const useStore = create((set, get) => {
             const newNodes = [...s.nodes];
             if (idx >= 0) newNodes.splice(idx + 1, 0, node);
             else newNodes.push(node);
-            // Insert new node after after_id in the path
+            // Insert new node after after_id, keeping the rest of the path
             const afterIdx = s.selectedPath.indexOf(payload.after_id);
             const newPath = afterIdx >= 0
-              ? [...s.selectedPath.slice(0, afterIdx + 1), node.id]
+              ? [...s.selectedPath.slice(0, afterIdx + 1), node.id, ...s.selectedPath.slice(afterIdx + 1)]
               : [...s.selectedPath, node.id];
-            // Update the selected branch's count and leaf
             const newBranches = s.branches.map((b) => {
               if (b.branchId === s.selectedLeafId) {
                 b.count = newPath.length;
-                b.branchId = node.id;
-                b.preview = node.content;
               }
               return b;
             });
-            return { nodes: newNodes, selectedPath: newPath, selectedLeafId: node.id, branches: newBranches, _skipLoadNodes: true };
+            return { nodes: newNodes, selectedPath: newPath, branches: newBranches, _skipLoadNodes: true };
           });
           // Linked insert reparents children — refresh fork points
           send("branches:forks", { leafId: get().selectedLeafId }).then((forkIds) => {

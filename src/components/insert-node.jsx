@@ -13,6 +13,7 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
   const [hovered, setHovered] = useState(false);
   const wrapperRef = useRef(null);
   const inputRef = useRef(null);
+  const lastInsertedId = useRef(null);
 
   const isDragging = draggedNodeId != null;
   const showDropIndicator = (() => {
@@ -36,6 +37,7 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
       if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
         setActive(false);
         setText("");
+        lastInsertedId.current = null;
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
@@ -46,11 +48,14 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
     const trimmed = text.trim();
     if (!trimmed) return;
     beforeCreate?.();
+    const afterId = lastInsertedId.current ?? prevNode.id;
     createNode({
       content: trimmed,
-      parent_id: prevNode.id,
-      after_id: prevNode.id,
+      parent_id: afterId,
+      after_id: afterId,
       linked,
+    }).then((node) => {
+      if (node) lastInsertedId.current = node.id;
     });
     setText("");
   }
@@ -67,6 +72,7 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
     if (e.key === "Escape") {
       setActive(false);
       setText("");
+      lastInsertedId.current = null;
     }
   }
 
@@ -95,17 +101,17 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
               <div className="flex items-center gap-2">
                 <Button size="sm" disabled={!text.trim()} onClick={() => handleCreate(true)}>
                   <Link2 className="h-3 w-3" />
-                  Linked
+                  Insert
                 </Button>
                 <Button size="sm" variant="outline" disabled={!text.trim()} onClick={() => handleCreate(false)}>
                   <GitBranch className="h-3 w-3" />
-                  Branch
+                  New Branch
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => { setActive(false); setText(""); }}>
+                <Button size="sm" variant="ghost" onClick={() => { setActive(false); setText(""); lastInsertedId.current = null; }}>
                   Cancel
                 </Button>
                 <span className="text-xs text-muted-foreground ml-auto hidden sm:inline">
-                  Enter = linked, Shift+Enter = branch
+                  Enter = insert, Shift+Enter = branch
                 </span>
               </div>
             </div>

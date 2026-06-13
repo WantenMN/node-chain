@@ -53,6 +53,7 @@ export function ProjectPage({ projectId }) {
   const loadNodes = useStore((s) => s.loadNodes);
   const getForkPoints = useStore((s) => s.getForkPoints);
   const forkNodeIds = useStore((s) => s._forkNodeIds);
+  const scrollToNodeId = useStore((s) => s._scrollToNodeId);
 
   // Virtualizer — only renders nodes visible in the viewport.
   // Chromium caps element height at ~33,554,432px. With 72px estimate,
@@ -118,6 +119,18 @@ export function ProjectPage({ projectId }) {
       });
     }
   }, [nodes, virtualizer]);
+
+  // Scroll to a specific node (e.g. fork point)
+  useEffect(() => {
+    if (scrollToNodeId == null) return;
+    useStore.setState({ _scrollToNodeId: null });
+    const idx = nodes.findIndex((n) => n.id === scrollToNodeId);
+    if (idx >= 0) {
+      requestAnimationFrame(() => {
+        virtualizer.scrollToIndex(idx, { align: "center" });
+      });
+    }
+  }, [scrollToNodeId, nodes, virtualizer]);
 
   const forkPoints = useMemo(() => getForkPoints(), [forkNodeIds, getForkPoints]);
 

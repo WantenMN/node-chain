@@ -137,6 +137,7 @@ export const useStore = create((set, get) => {
     _skipLoadNodes: false,
     _submitting: false,
     _scrollToBottom: false,
+    _scrollToNodeId: null,
     _draggedNodeId: null,
     _hoveredNodeId: null,
     _nodesRequestId: null,
@@ -402,6 +403,25 @@ export const useStore = create((set, get) => {
     /** Fork points loaded from the backend — nodes with >1 child. */
     getForkPoints: () => {
       return get()._forkNodeIds;
+    },
+
+    /** Scroll to the fork point where this branch diverged from its parent. */
+    scrollToForkPoint: () => {
+      const { nodes, _forkNodeIds } = get();
+      if (_forkNodeIds.size === 0) return;
+      // Find the deepest fork point (highest index in current branch)
+      let deepestIdx = -1;
+      let deepestId = null;
+      for (const forkId of _forkNodeIds) {
+        const idx = nodes.findIndex((n) => n.id === forkId);
+        if (idx > deepestIdx) {
+          deepestIdx = idx;
+          deepestId = forkId;
+        }
+      }
+      if (deepestId != null) {
+        set({ _scrollToNodeId: deepestId });
+      }
     },
   };
 });

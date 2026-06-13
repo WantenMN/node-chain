@@ -109,6 +109,12 @@ export function Home() {
 
   const forkPoints = useMemo(() => getForkPoints(), [forkNodeIds, getForkPoints]);
 
+  const nodeIndexMap = useMemo(() => {
+    const map = new Map();
+    for (let i = 0; i < nodes.length; i++) map.set(nodes[i].id, i);
+    return map;
+  }, [nodes]);
+
   return (
     <div className="flex">
       {/* Sidebar */}
@@ -175,6 +181,8 @@ export function Home() {
                         <InsertNode
                           prevNode={nodes[i - 1]}
                           nextNode={node}
+                          prevIndex={i - 1}
+                          nodeIndexMap={nodeIndexMap}
                           beforeCreate={snapshotAnchor}
                         />
                       )}

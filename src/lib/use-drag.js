@@ -51,77 +51,86 @@ export function useDrag() {
         ds.ghost = ghost;
       }
 
-      // Move ghost
+      // Move ghost immediately
       if (ds.ghost) {
         ds.ghost.style.left = ev.clientX + "px";
         ds.ghost.style.top = ev.clientY + "px";
       }
 
-      // Find drop target via zone-based hit testing
-      const nodes = useStore.getState().nodes;
-      const prev = useStore.getState()._hoveredNodeId;
-      let newHover = prev;
+      // Store latest mouse position and throttle zone calculation
+      ds.clientX = ev.clientX;
+      ds.clientY = ev.clientY;
 
-      const wrappers = document.querySelectorAll("[data-node-index]");
-      const rects = [];
-      wrappers.forEach(el => {
-        const idx = Number(el.dataset.nodeIndex);
-        const node = nodes[idx];
-        if (node) rects.push({ id: node.id, rect: el.getBoundingClientRect() });
-      });
+      if (ds.zoneRafId != null) return;
+      ds.zoneRafId = requestAnimationFrame(() => {
+        ds.zoneRafId = null;
+        const { clientX, clientY } = ds;
 
-      const dragRectIdx = rects.findIndex(r => r.id === ds.nodeId);
+        const nodes = useStore.getState().nodes;
+        const prev = useStore.getState()._hoveredNodeId;
+        let newHover = prev;
 
-      if (dragRectIdx >= 0) {
-        let found = false;
-        for (let i = 0; i < rects.length; i++) {
-          if (i === dragRectIdx) continue;
-          const { id, rect } = rects[i];
-          let zoneTop, zoneBottom;
+        const wrappers = document.querySelectorAll("[data-node-index]");
+        const rects = [];
+        wrappers.forEach(el => {
+          const idx = Number(el.dataset.nodeIndex);
+          const node = nodes[idx];
+          if (node) rects.push({ id: node.id, rect: el.getBoundingClientRect() });
+        });
 
-          if (i < dragRectIdx) {
-            if (i === dragRectIdx - 1) {
-              zoneTop = rect.top;
-              zoneBottom = rect.bottom;
+        const dragRectIdx = rects.findIndex(r => r.id === ds.nodeId);
+
+        if (dragRectIdx >= 0) {
+          let found = false;
+          for (let i = 0; i < rects.length; i++) {
+            if (i === dragRectIdx) continue;
+            const { id, rect } = rects[i];
+            let zoneTop, zoneBottom;
+
+            if (i < dragRectIdx) {
+              if (i === dragRectIdx - 1) {
+                zoneTop = rect.top;
+                zoneBottom = rect.bottom;
+              } else {
+                const gapBelow = rects[i + 1].rect.top - rect.bottom;
+                zoneTop = rect.top;
+                zoneBottom = rect.bottom + gapBelow;
+              }
             } else {
-              const gapBelow = rects[i + 1].rect.top - rect.bottom;
-              zoneTop = rect.top;
-              zoneBottom = rect.bottom + gapBelow;
+              if (i === dragRectIdx + 1) {
+                zoneTop = rect.top;
+                zoneBottom = rect.bottom;
+              } else {
+                const gapAbove = rect.top - rects[i - 1].rect.bottom;
+                zoneTop = rect.top - gapAbove;
+                zoneBottom = rect.bottom;
+              }
             }
-          } else {
-            if (i === dragRectIdx + 1) {
-              zoneTop = rect.top;
-              zoneBottom = rect.bottom;
-            } else {
-              const gapAbove = rect.top - rects[i - 1].rect.bottom;
-              zoneTop = rect.top - gapAbove;
-              zoneBottom = rect.bottom;
+
+            if (clientY >= zoneTop && clientY < zoneBottom) {
+              newHover = id;
+              found = true;
+              break;
             }
           }
 
-          if (ev.clientY >= zoneTop && ev.clientY < zoneBottom) {
-            newHover = id;
+          if (!found && dragRectIdx > 0 && clientY < rects[0].rect.top) {
+            newHover = rects[0].id;
             found = true;
-            break;
           }
+
+          if (!found && dragRectIdx < rects.length - 1 && clientY >= rects[rects.length - 1].rect.bottom) {
+            newHover = rects[rects.length - 1].id;
+            found = true;
+          }
+
+          if (!found) newHover = null;
         }
 
-        if (!found && dragRectIdx > 0 && ev.clientY < rects[0].rect.top) {
-          newHover = rects[0].id;
-          found = true;
+        if (newHover !== prev) {
+          useStore.setState({ _hoveredNodeId: newHover });
         }
-
-        if (!found && dragRectIdx < rects.length - 1 && ev.clientY >= rects[rects.length - 1].rect.bottom) {
-          newHover = rects[rects.length - 1].id;
-          found = true;
-        }
-
-        if (!found) newHover = null;
-      }
-
-      if (newHover !== prev) {
-        useStore.setState({ _hoveredNodeId: newHover });
-      }
+      });
     };
 
     const onPointerUp = () => {
@@ -194,6 +203,7 @@ export function useDrag() {
       document.removeEventListener("wheel", onWheel);
       document.removeEventListener("keydown", onKeyDown);
       cancelAnimationFrame(rafId);
+      if (dragState.current?.zoneRafId != null) cancelAnimationFrame(dragState.current.zoneRafId);
     }
 
     // Store nodeContent for ghost

@@ -3,7 +3,7 @@ import { GitBranch, Link2, Plus } from "lucide-react";
 import { useStore } from "../store/use-store";
 import { Button } from "./ui/button";
 
-export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeCreate }) {
+export const InsertNode = memo(function InsertNode({ prevNode, nextNode, prevIndex, nodeIndexMap, beforeCreate }) {
   const createNode = useStore((s) => s.createNode);
   const hoveredNodeId = useStore((s) => s._hoveredNodeId);
   const draggedNodeId = useStore((s) => s._draggedNodeId);
@@ -19,12 +19,11 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
   const showDropIndicator = (() => {
     if (hoveredNodeId == null || draggedNodeId == null) return false;
     if (hoveredNodeId === draggedNodeId) return false;
-    const nodes = useStore.getState().nodes;
-    const dragIdx = nodes.findIndex((n) => n.id === draggedNodeId);
-    const hoverIdx = nodes.findIndex((n) => n.id === hoveredNodeId);
-    if (dragIdx < 0 || hoverIdx < 0) return false;
-    return (dragIdx < hoverIdx && prevNode?.id === hoveredNodeId) ||
-           (dragIdx > hoverIdx && nextNode?.id === hoveredNodeId);
+    const dragIdx = nodeIndexMap.get(draggedNodeId);
+    if (dragIdx == null) return false;
+    if (hoveredNodeId === prevNode?.id) return dragIdx < prevIndex;
+    if (hoveredNodeId === nextNode?.id) return dragIdx > prevIndex + 1;
+    return false;
   })();
 
   useEffect(() => {
@@ -37,11 +36,12 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
       if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
         setActive(false);
         setText("");
+        setHovered(false);
         lastInsertedId.current = null;
       }
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
   }, [active]);
 
   function handleCreate(linked) {
@@ -72,6 +72,7 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
     if (e.key === "Escape") {
       setActive(false);
       setText("");
+      setHovered(false);
       lastInsertedId.current = null;
     }
   }
@@ -107,7 +108,7 @@ export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeC
                   <GitBranch className="h-3 w-3" />
                   New Branch
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => { setActive(false); setText(""); lastInsertedId.current = null; }}>
+                <Button size="sm" variant="ghost" onClick={() => { setActive(false); setText(""); setHovered(false); lastInsertedId.current = null; }}>
                   Cancel
                 </Button>
                 <span className="text-xs text-muted-foreground ml-auto hidden sm:inline">

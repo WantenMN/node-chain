@@ -1,5 +1,6 @@
-import { useEffect, useRef, useMemo } from "react";
+import { useEffect, useRef, useMemo, useCallback } from "react";
 import { Link2, Plus } from "lucide-react";
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { useStore } from "../store/use-store";
 import { InsertNode } from "../components/insert-node";
 import { NodeCard } from "../components/node-card";
@@ -27,7 +28,7 @@ function TopDropZone() {
       {showIndicator && (
         <>
           <div className="absolute inset-x-0 h-[2px] bg-timeline-active shadow-[0_0_6px_var(--color-timeline-active)]" style={{ top: 0 }} />
-          <div className="absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-timeline-active text-white text-[11px] font-medium shadow-sm whitespace-nowrap" style={{ left: 24, top: 0 }}>
+          <div className="absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-timeline-active text-white text-[11px] font-medium shadow-sm whitespace-nowrap" style={{ left: 64, top: 0 }}>
             <Plus className="h-3 w-3" />
             Drop here
           </div>
@@ -50,11 +51,20 @@ export function Home() {
   const connect = useStore((s) => s.connect);
   const loadNodes = useStore((s) => s.loadNodes);
   const getForkPoints = useStore((s) => s.getForkPoints);
+  const forkNodeIds = useStore((s) => s._forkNodeIds);
+
+  // Virtualizer — only renders nodes visible in the viewport
+  const virtualizer = useWindowVirtualizer({
+    count: nodes.length,
+    estimateSize: useCallback(() => 72, []),
+    overscan: 5,
+    measureElement: useCallback((el) => el.getBoundingClientRect().height, []),
+  });
 
   // Connect WebSocket on mount
   useEffect(() => { connect(); }, [connect]);
 
-  // Load nodes when selected path changes
+  // Load nodes when selected path changes (guard: selectBranch already loads nodes)
   useEffect(() => {
     if (!connected || selectedPath.length === 0) return;
 
@@ -64,13 +74,6 @@ export function Home() {
     }
 
     snapshotAnchor();
-
-    loadNodes(selectedPath).then(() => {
-      if (useStore.getState()._shouldFocusBottom) {
-        useStore.setState({ _shouldFocusBottom: false });
-        bottomInputRef.current?.focus();
-      }
-    });
   }, [selectedPath, connected, loadNodes]);
 
   function snapshotAnchor() {
@@ -97,14 +100,13 @@ export function Home() {
     if (useStore.getState()._scrollToBottom) {
       useStore.setState({ _scrollToBottom: false });
       requestAnimationFrame(() => {
-        window.scrollTo(0, document.body.scrollHeight);
+        virtualizer.scrollToIndex(nodes.length - 1, { align: "end" });
         bottomInputRef.current?.focus();
       });
     }
-  }, [nodes]);
+  }, [nodes, virtualizer]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const forkPoints = useMemo(() => getForkPoints(), [branches]);
+  const forkPoints = useMemo(() => getForkPoints(), [forkNodeIds, getForkPoints]);
 
   return (
     <div className="flex">
@@ -133,32 +135,57 @@ export function Home() {
               <p className="text-muted-foreground">No nodes yet. Type below to start a chain.</p>
             </div>
           ) : (
-            /* Timeline container */
+            /* Timeline container — virtualized */
             <div className="relative">
-              {/* Continuous line — behind everything */}
+              {/* Continuous line — behind everything, spans full virtual height.
+                  Left offset = index column (w-10 = 40px) + rail dot offset (16px) */}
               <div
-                className="absolute top-0 bottom-0 w-px bg-timeline pointer-events-none"
-                style={{ left: 16, zIndex: 0 }}
+                className="absolute top-0 w-px bg-timeline pointer-events-none"
+                style={{ left: 56, zIndex: 0, height: virtualizer.getTotalSize() }}
               />
 
               <TopDropZone />
 
-              {nodes.map((node, i) => (
-                <div key={node.id} data-node-index={i}>
-                  {i > 0 && (
-                    <InsertNode
-                      prevNode={nodes[i - 1]}
-                      nextNode={node}
-                      beforeCreate={snapshotAnchor}
-                    />
-                  )}
-                  <NodeCard
-                    node={node}
-                    index={i + 1}
-                    isFork={forkPoints.has(node.id)}
-                  />
-                </div>
-              ))}
+              <div
+                style={{
+                  height: virtualizer.getTotalSize(),
+                  width: "100%",
+                  position: "relative",
+                }}
+              >
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const i = virtualRow.index;
+                  const node = nodes[i];
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
+                      data-node-index={i}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    >
+                      {i > 0 && (
+                        <InsertNode
+                          prevNode={nodes[i - 1]}
+                          nextNode={node}
+                          beforeCreate={snapshotAnchor}
+                        />
+                      )}
+                      <NodeCard
+                        node={node}
+                        index={i + 1}
+                        isFork={forkPoints.has(node.id)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
 
               {/* Tail space */}
               <div className="h-8" />

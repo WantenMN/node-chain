@@ -2483,6 +2483,7 @@
         "npm:@tailwindcss/vite@^4.3.0",
         "npm:@tanstack/react-router-devtools@^1.167.0",
         "npm:@tanstack/react-router@^1.170.15",
+        "npm:@tanstack/react-virtual@^3.14.2",
         "npm:@tanstack/router-plugin@^1.168.18",
         "npm:@types/react-dom@^19.2.3",
         "npm:@types/react@^19.2.14",

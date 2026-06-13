@@ -1,13 +1,12 @@
 import { useStore } from "../store/use-store";
-import { pathKey } from "../lib/path-utils";
 import { Button } from "./ui/button";
 import { Select } from "./ui/select";
 import { GitBranch } from "lucide-react";
 
 export function BranchSidebar() {
   const branches = useStore((s) => s.branches);
-  const selectedPath = useStore((s) => s.selectedPath);
-  const selectPath = useStore((s) => s.selectPath);
+  const selectedLeafId = useStore((s) => s.selectedLeafId);
+  const selectBranch = useStore((s) => s.selectBranch);
 
   return (
     <aside className="w-64 shrink-0 border-r py-4 px-3 hidden md:block sticky top-14 h-[calc(100vh-3.5rem)] overflow-auto">
@@ -17,13 +16,13 @@ export function BranchSidebar() {
       </h2>
       <div className="space-y-1">
         {branches.map((branch) => {
-          const isSelected = pathKey(branch.path) === pathKey(selectedPath);
+          const isSelected = branch.branchId === selectedLeafId;
           return (
             <Button
               key={branch.branchId}
               variant={isSelected ? "default" : "ghost"}
               className="w-full justify-start h-auto py-2 px-3"
-              onClick={() => selectPath(branch.path)}
+              onClick={() => selectBranch(branch.branchId)}
             >
               <div className="text-left min-w-0">
                 <div className="font-medium truncate text-sm">{branch.preview}</div>
@@ -41,20 +40,20 @@ export function BranchSidebar() {
 
 export function MobileBranchSelect() {
   const branches = useStore((s) => s.branches);
-  const selectedPath = useStore((s) => s.selectedPath);
-  const selectPath = useStore((s) => s.selectPath);
+  const selectedLeafId = useStore((s) => s.selectedLeafId);
+  const selectBranch = useStore((s) => s.selectBranch);
 
   return (
     <div className="md:hidden mb-4">
       <Select
-        value={pathKey(selectedPath)}
+        value={selectedLeafId ?? ""}
         onChange={(e) => {
-          const branch = branches.find((b) => pathKey(b.path) === e.target.value);
-          if (branch) selectPath(branch.path);
+          const leafId = Number(e.target.value);
+          if (leafId) selectBranch(leafId);
         }}
       >
         {branches.map((b) => (
-          <option key={b.branchId} value={pathKey(b.path)}>
+          <option key={b.branchId} value={b.branchId}>
             {b.preview} ({b.count} nodes)
           </option>
         ))}

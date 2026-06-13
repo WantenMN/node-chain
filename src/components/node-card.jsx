@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, memo } from "react";
 import { GitFork, GripVertical, MoreHorizontal, Pencil, Trash2, Trash } from "lucide-react";
 import { useStore } from "../store/use-store";
 import { Button } from "./ui/button";
@@ -88,7 +88,7 @@ function ForkPopover({ nodeId, selectedPath, onSelectBranch, open, onOpenChange,
   );
 }
 
-export function NodeCard({ node, index, isFork }) {
+export const NodeCard = memo(function NodeCard({ node, index, isFork }) {
   const deleteNode = useStore((s) => s.deleteNode);
   const deleteNodeWithChildren = useStore((s) => s.deleteNodeWithChildren);
   const updateNode = useStore((s) => s.updateNode);
@@ -151,6 +151,11 @@ export function NodeCard({ node, index, isFork }) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
+        {/* Index number — left of timeline line */}
+        <span className="text-[11px] font-mono text-muted-foreground/50 w-10 shrink-0 text-right select-none tabular-nums pr-2 pt-[19px]">
+          {index}
+        </span>
+
         {/* Rail column: dot aligned to first line of text */}
         <div className="relative w-8 shrink-0">
           {/* Dot — opaque, covers the continuous line behind */}
@@ -178,11 +183,6 @@ export function NodeCard({ node, index, isFork }) {
         {/* Content area */}
         <div className={`flex-1 min-w-0 pt-3 pb-3 pr-1 ${isDragging ? "opacity-40" : ""}`}>
           <div className="flex items-start gap-2">
-            {/* Index number */}
-            <span className="text-[11px] font-mono text-muted-foreground/50 mt-[3px] w-5 shrink-0 text-right select-none">
-              {index}
-            </span>
-
             {/* Main content */}
             <div className="flex-1 min-w-0">
               {editing ? (
@@ -296,4 +296,4 @@ export function NodeCard({ node, index, isFork }) {
 
     </>
   );
-}
+});

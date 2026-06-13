@@ -163,6 +163,6 @@ async function generateNodes(trunkLength: number, branchCount: number) {
 
 if (import.meta.main) {
   const t = performance.now();
-  await generateNodes(2000, 20);
+  await generateNodes(80000, 8);
   console.log(`Done in ${(performance.now() - t).toFixed(0)}ms`);
 }

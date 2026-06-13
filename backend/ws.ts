@@ -1,4 +1,4 @@
-import { db, getNode, getAllBranches, getPathFromLeaf } from "./db.ts";
+import { db, getNode, getBranchMeta, getBranchPath, getBranchNodes } from "./db.ts";
 
 const clients = new Set<any>();
 
@@ -11,6 +11,13 @@ export function broadcast(data: unknown, exclude?: any) {
 
 function send(ws: any, data: unknown) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(data));
+}
+
+/** Broadcast lightweight branch metadata to all clients. */
+function broadcastBranchMeta(exclude?: any) {
+  const branches = getBranchMeta();
+  broadcast({ action: "branches:list", data: branches }, exclude);
+  return branches;
 }
 
 export function setupWebSocket(wss: any) {
@@ -35,41 +42,98 @@ function handleMessage(ws: any, raw: string) {
   const { action, requestId, payload } = msg;
 
   switch (action) {
+    // ── Branch metadata (lightweight — no paths, no node data) ───────────
     case "branches:list": {
-      send(ws, { action: "branches:list", requestId, data: getAllBranches() });
+      const branches = getBranchMeta();
+      send(ws, { action: "branches:list", requestId, data: branches });
       break;
     }
 
+    // ── Single branch path (leaf → root IDs) ────────────────────────────
+    case "branches:path": {
+      const { leafId } = payload;
+      const path = getBranchPath(leafId);
+      send(ws, { action: "branches:path", requestId, data: path });
+      break;
+    }
+
+    // ── Fork points on a branch (nodes with >1 child, leaf→root) ────────
+    case "branches:forks": {
+      const { leafId } = payload as { leafId: number };
+      if (leafId == null) {
+        send(ws, { action: "branches:forks", requestId, data: [] });
+        break;
+      }
+      // Walk from leaf to root via parent_id, check each node for >1 child
+      const rows = db.prepare(`
+        WITH RECURSIVE path(id, parent_id) AS (
+          SELECT id, parent_id FROM nodes WHERE id = ?
+          UNION ALL
+          SELECT n.id, n.parent_id FROM nodes n JOIN path p ON n.id = p.parent_id
+        )
+        SELECT p.id FROM path p
+        WHERE p.parent_id IS NOT NULL
+          AND (SELECT COUNT(*) FROM nodes WHERE parent_id = p.id) > 1
+      `).all(leafId) as { id: number }[];
+      send(ws, { action: "branches:forks", requestId, data: rows.map((r) => r.id) });
+      break;
+    }
+
+    // ── Child branches from a node (for fork popover) ───────────────────
     case "branches:from": {
       const { nodeId } = payload;
       const children = db.prepare("SELECT id, content FROM nodes WHERE parent_id = ?").all(nodeId) as any[];
+      if (children.length === 0) {
+        send(ws, { action: "branches:from", requestId, data: [] });
+        break;
+      }
+      const childIds = children.map((c) => c.id);
+      const placeholders = childIds.map(() => "?").join(",");
+      const leafRows = db.prepare(`
+        WITH RECURSIVE subtree(child_id, current_id, path) AS (
+          SELECT id, id, CAST(id AS TEXT) FROM nodes WHERE id IN (${placeholders})
+          UNION ALL
+          SELECT s.child_id, n.id, s.path || ',' || CAST(n.id AS TEXT)
+          FROM subtree s JOIN nodes n ON n.parent_id = s.current_id
+        )
+        SELECT child_id, path FROM subtree s
+        WHERE s.current_id NOT IN (
+          SELECT DISTINCT parent_id FROM nodes WHERE parent_id IS NOT NULL
+        )
+      `).all(...childIds) as { child_id: number; path: string }[];
+
+      const pathMap = new Map<number, string[]>();
+      for (const row of leafRows) {
+        if (!pathMap.has(row.child_id)) pathMap.set(row.child_id, []);
+        pathMap.get(row.child_id)!.push(row.path);
+      }
+
       const result = children.map((child) => {
-        const leaves = db.prepare(`
-          WITH RECURSIVE descendants(id) AS (
-            SELECT id FROM nodes WHERE id = ?
-            UNION ALL
-            SELECT n.id FROM nodes n JOIN descendants d ON n.parent_id = d.id
-          )
-          SELECT id FROM descendants
-          WHERE id NOT IN (SELECT DISTINCT parent_id FROM nodes WHERE parent_id IS NOT NULL)
-        `).all(child.id) as any[];
-        const paths = leaves.map((leaf) => getPathFromLeaf(leaf.id));
-        return { child, branches: paths.map((p) => ({ path: p, count: p.length })) };
+        const rawPaths = pathMap.get(child.id) ?? [];
+        const branches = rawPaths.map((p) => {
+          const path = [nodeId, ...p.split(",").map(Number)];
+          return { path, count: path.length };
+        });
+        return { child, branches };
       });
       send(ws, { action: "branches:from", requestId, data: result });
       break;
     }
 
+    // ── Load nodes for a branch (by leafId) ─────────────────────────────
     case "nodes:list": {
-      const { path } = payload;
-      if (path && Array.isArray(path) && path.length > 0) {
+      const { leafId, path } = payload;
+      if (leafId != null) {
+        // New: load by leafId — single recursive CTE, no full-table scan
+        send(ws, { action: "nodes:list", requestId, data: getBranchNodes(leafId) });
+      } else if (path && Array.isArray(path) && path.length > 0) {
+        // Legacy: load by path array — fetch from DB by IDs
         const placeholders = path.map(() => "?").join(",");
         const nodeMap = new Map(
           (db.prepare(`SELECT * FROM nodes WHERE id IN (${placeholders})`).all(...path) as any[])
-            .map((n) => [n.id, n])
+            .map((n: any) => [n.id, n])
         );
-        const nodes = path.map((id) => nodeMap.get(id)).filter(Boolean);
-        send(ws, { action: "nodes:list", requestId, data: nodes });
+        send(ws, { action: "nodes:list", requestId, data: path.map((id: number) => nodeMap.get(id)).filter(Boolean) });
       } else {
         const nodes = db.prepare("SELECT * FROM nodes ORDER BY order_val ASC").all();
         send(ws, { action: "nodes:list", requestId, data: nodes });
@@ -77,6 +141,7 @@ function handleMessage(ws: any, raw: string) {
       break;
     }
 
+    // ── Create node ─────────────────────────────────────────────────────
     case "nodes:create": {
       const { content, parent_id, after_id, linked } = payload;
 
@@ -118,28 +183,69 @@ function handleMessage(ws: any, raw: string) {
         broadcast({ action: "nodes:updated", data: updated }, ws);
       }
 
-      const branches = getAllBranches();
+      const branches = broadcastBranchMeta(ws);
       send(ws, { action: "branches:list", data: branches });
-      broadcast({ action: "branches:list", data: branches }, ws);
       break;
     }
 
+    // ── Delete single node ──────────────────────────────────────────────
     case "nodes:delete": {
       const { id } = payload;
       const node = db.prepare("SELECT parent_id FROM nodes WHERE id = ?").get(id) as { parent_id: number | null } | undefined;
       const grandparentId = node?.parent_id ?? null;
-      db.prepare("UPDATE nodes SET parent_id = ? WHERE parent_id = ?").run(grandparentId, id);
-      db.prepare("DELETE FROM branches WHERE leaf_id = ?").run(id);
-      db.prepare("DELETE FROM nodes WHERE id = ?").run(id);
+      db.exec("BEGIN");
+      try {
+        db.prepare("UPDATE nodes SET parent_id = ? WHERE parent_id = ?").run(grandparentId, id);
+        db.prepare("DELETE FROM branches WHERE leaf_id = ?").run(id);
+        db.prepare("DELETE FROM nodes WHERE id = ?").run(id);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
       send(ws, { action: "nodes:delete", requestId, data: { ok: true } });
       broadcast({ action: "nodes:deleted", data: { id } }, ws);
 
-      const branches = getAllBranches();
+      const branches = broadcastBranchMeta(ws);
       send(ws, { action: "branches:list", data: branches });
-      broadcast({ action: "branches:list", data: branches }, ws);
       break;
     }
 
+    // ── Batch delete ────────────────────────────────────────────────────
+    case "nodes:delete_batch": {
+      const { ids } = payload as { ids: number[] };
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        send(ws, { action: "nodes:delete_batch", requestId, error: "ids array is required" });
+        break;
+      }
+
+      const placeholders = ids.map(() => "?").join(",");
+
+      db.exec("BEGIN");
+      try {
+        db.prepare(`
+          UPDATE nodes SET parent_id = (
+            SELECT p.parent_id FROM nodes p WHERE p.id = nodes.parent_id
+          )
+          WHERE parent_id IN (${placeholders}) AND id NOT IN (${placeholders})
+        `).run(...ids, ...ids);
+        db.prepare(`DELETE FROM branches WHERE leaf_id IN (${placeholders})`).run(...ids);
+        db.prepare(`DELETE FROM nodes WHERE id IN (${placeholders})`).run(...ids);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
+
+      send(ws, { action: "nodes:delete_batch", requestId, data: { ok: true } });
+      broadcast({ action: "nodes:deleted_batch", data: { ids } }, ws);
+
+      const branches = broadcastBranchMeta(ws);
+      send(ws, { action: "branches:list", data: branches });
+      break;
+    }
+
+    // ── Update node content ─────────────────────────────────────────────
     case "nodes:update": {
       const { id, content } = payload;
       db.prepare("UPDATE nodes SET content = ? WHERE id = ?").run(content, id);
@@ -149,6 +255,7 @@ function handleMessage(ws: any, raw: string) {
       break;
     }
 
+    // ── Reorder nodes ───────────────────────────────────────────────────
     case "nodes:reorder": {
       const { path } = payload;
       if (!path || !Array.isArray(path)) {
@@ -161,8 +268,6 @@ function handleMessage(ws: any, raw: string) {
         break;
       }
 
-      // Only UPDATE nodes whose parent actually changed (typically just 2-3 nodes).
-      // Fetch current parents in one query instead of N separate queries.
       const ids = path as number[];
       const placeholders = ids.map(() => "?").join(",");
       const currentNodes = db.prepare(
@@ -177,16 +282,12 @@ function handleMessage(ws: any, raw: string) {
         const nodeId = ids[i];
         const expectedParent = i > 0 ? ids[i - 1] : rootParentId;
         const current = currentMap.get(nodeId);
-        // Only update if parent actually changed
         if (!current || current.parent_id !== expectedParent) {
           updateStmt.run(expectedParent, i + 1, nodeId);
         }
       }
 
       send(ws, { action: "nodes:reorder", requestId, data: { ok: true } });
-
-      // Reorder doesn't change branch structure — skip expensive getAllBranches broadcast.
-      // The requesting client already has the correct path from its optimistic update.
       break;
     }
   }

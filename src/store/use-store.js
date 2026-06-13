@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { pathKey, pathStartsWith } from "../lib/path-utils";
 
 function createWsUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -31,57 +30,14 @@ export const useStore = create((set, get) => {
 
     if (msg.action === "branches:list") {
       const newBranches = msg.data;
-
-      const pendingNodeId = state._newBranchNodeId;
-      if (pendingNodeId) set({ _newBranchNodeId: null });
+      let branchWasDeleted = false;
 
       set((s) => {
-        let newPath = s.selectedPath;
-
-        if (newPath.length === 0) {
-          newPath = newBranches[0]?.path ?? [];
-        } else if (pendingNodeId) {
-          const target = newBranches.find((b) => b.path.includes(pendingNodeId));
-          if (target) newPath = target.path;
-        } else {
-          const currentExists = newBranches.some(
-            (b) => pathKey(b.path) === pathKey(newPath)
-          );
-          if (currentExists) {
-            const longer = newBranches.filter(
-              (b) => b.path.length > newPath.length && pathStartsWith(b.path, newPath)
-            );
-            newPath = longer.length > 0 ? longer[0].path : newPath;
-          } else {
-            const supersets = newBranches.filter((b) => pathStartsWith(b.path, newPath));
-            if (supersets.length > 0) {
-              newPath = supersets[0].path;
-            } else {
-              // Find branch with longest common prefix (handles node deletion)
-              let best = null;
-              let bestLen = 0;
-              for (const b of newBranches) {
-                let common = 0;
-                for (let i = 0; i < b.path.length && i < newPath.length; i++) {
-                  if (b.path[i] === newPath[i]) common++;
-                  else break;
-                }
-                if (common > bestLen) {
-                  bestLen = common;
-                  best = b;
-                }
-              }
-              newPath = best ? best.path : newBranches[0]?.path ?? newPath;
-            }
-          }
-        }
-
         // Merge: update existing objects in-place, add/remove as needed
         const oldMap = new Map(s.branches.map((b) => [b.branchId, b]));
         const merged = newBranches.map((nb) => {
           const old = oldMap.get(nb.branchId);
           if (old) {
-            old.path = nb.path;
             old.count = nb.count;
             old.preview = nb.preview;
             return old;
@@ -89,20 +45,40 @@ export const useStore = create((set, get) => {
           return nb;
         });
 
-        const pathChanged = pathKey(newPath) !== pathKey(s.selectedPath);
-        return pathChanged
-          ? { branches: merged, selectedPath: newPath }
-          : { branches: merged };
+        // Check if selected branch still exists
+        const selectedExists = merged.some((b) => b.branchId === s.selectedLeafId);
+        if (!selectedExists && merged.length > 0) {
+          // Selected branch was deleted — switch to first available
+          branchWasDeleted = true;
+          return { branches: merged, selectedLeafId: merged[0].branchId };
+        }
+
+        return { branches: merged };
       });
+
+      // If selected branch was deleted, reload nodes for the new branch
+      if (branchWasDeleted) {
+        get().selectBranch(get().selectedLeafId);
+      }
     } else if (msg.action === "nodes:updated") {
-      // Skip if node is being edited locally
       if (state._dirtyNodeIds.has(msg.data.id)) return;
       set((s) => ({
         nodes: s.nodes.map((n) => (n.id === msg.data.id ? msg.data : n)),
       }));
+    } else if (msg.action === "nodes:created") {
+      // Another client created a node — if we're on the same branch, we could
+      // append it. For now, the branches:list broadcast will trigger a re-select
+      // which reloads nodes. No action needed here.
     } else if (msg.action === "nodes:deleted") {
       set((s) => ({
         nodes: s.nodes.filter((n) => n.id !== msg.data.id),
+        selectedPath: s.selectedPath.filter((id) => id !== msg.data.id),
+      }));
+    } else if (msg.action === "nodes:deleted_batch") {
+      const deletedIds = new Set(msg.data.ids);
+      set((s) => ({
+        nodes: s.nodes.filter((n) => !deletedIds.has(n.id)),
+        selectedPath: s.selectedPath.filter((id) => !deletedIds.has(id)),
       }));
     }
   }
@@ -117,17 +93,11 @@ export const useStore = create((set, get) => {
     ws.onopen = () => {
       if (ws !== currentWs) return;
       set({ connected: true, _hasConnected: true });
-      send("branches:list").then((data) => {
-        set({
-          branches: data,
-          selectedPath: data.length > 0 ? data[0].path : [],
-          loading: false,
-        });
-        // Resync nodes for current path after reconnect
-        const currentPath = get().selectedPath;
-        if (currentPath.length > 0) {
-          get().loadNodes(currentPath);
-        }
+      // Load branch metadata only (lightweight — no paths, no node data)
+      send("branches:list").then((branches) => {
+        const firstLeafId = branches.length > 0 ? branches[0].branchId : null;
+        set({ branches, selectedLeafId: firstLeafId, loading: false });
+        if (firstLeafId) get().selectBranch(firstLeafId);
       });
     };
 
@@ -153,14 +123,14 @@ export const useStore = create((set, get) => {
 
   return {
     // State
-    branches: [],
-    selectedPath: [],
+    branches: [],           // { branchId, count, preview } — NO path
+    selectedLeafId: null,   // which branch is selected (leaf node id)
+    selectedPath: [],       // loaded lazily when branch is selected
     nodes: [],
     input: "",
     loading: true,
     connected: false,
     _hasConnected: false,
-    _newBranchNodeId: null,
     _shouldFocusBottom: false,
     _skipLoadNodes: false,
     _submitting: false,
@@ -169,19 +139,41 @@ export const useStore = create((set, get) => {
     _hoveredNodeId: null,
     _nodesRequestId: null,
     _dirtyNodeIds: new Set(),
+    _forkNodeIds: new Set(),
 
     // Actions
     connect,
     send,
 
-    selectPath: (path) => {
-      set({ selectedPath: path, _shouldFocusBottom: true });
+    /** Select a branch by its leafId. Fetches path + nodes. */
+    selectBranch: async (leafId) => {
+      const requestId = crypto.randomUUID();
+      set({ _nodesRequestId: requestId, selectedLeafId: leafId, _shouldFocusBottom: true });
+
+      // Fetch path first (lightweight — just IDs), then nodes
+      const path = await send("branches:path", { leafId });
+      if (get()._nodesRequestId !== requestId) return;
+      set({ selectedPath: path });
+
+      // Fetch fork points and nodes in parallel
+      const [nodes, forkIds] = await Promise.all([
+        send("nodes:list", { leafId }),
+        send("branches:forks", { leafId }),
+      ]);
+      if (get()._nodesRequestId !== requestId) return;
+      set({ nodes, _forkNodeIds: new Set(forkIds) });
     },
 
-    loadNodes: async (path) => {
+    /** Legacy selectPath — used by ForkPopover which passes a full path array. */
+    selectPath: (path) => {
+      const leafId = path[path.length - 1];
+      get().selectBranch(leafId);
+    },
+
+    loadNodes: async (leafId) => {
       const requestId = crypto.randomUUID();
       set({ _nodesRequestId: requestId });
-      const nodes = await send("nodes:list", { path });
+      const nodes = await send("nodes:list", { leafId });
       if (get()._nodesRequestId !== requestId) return;
       set({ nodes });
     },
@@ -200,19 +192,38 @@ export const useStore = create((set, get) => {
             const newNodes = [...s.nodes];
             if (idx >= 0) newNodes.splice(idx + 1, 0, node);
             else newNodes.push(node);
-            const newPath = [...s.selectedPath, node.id];
-            // Sync the selected branch's path so sidebar isSelected stays correct
+            // Insert new node after after_id in the path
+            const afterIdx = s.selectedPath.indexOf(payload.after_id);
+            const newPath = afterIdx >= 0
+              ? [...s.selectedPath.slice(0, afterIdx + 1), node.id]
+              : [...s.selectedPath, node.id];
+            // Update the selected branch's count and leaf
             const newBranches = s.branches.map((b) => {
-              if (b.path === s.selectedPath || pathKey(b.path) === pathKey(s.selectedPath)) {
-                b.path = newPath;
+              if (b.branchId === s.selectedLeafId) {
                 b.count = newPath.length;
+                b.branchId = node.id;
+                b.preview = node.content;
               }
               return b;
             });
-            return { nodes: newNodes, selectedPath: newPath, branches: newBranches, _skipLoadNodes: true };
+            return { nodes: newNodes, selectedPath: newPath, selectedLeafId: node.id, branches: newBranches, _skipLoadNodes: true };
+          });
+          // Linked insert reparents children — refresh fork points
+          send("branches:forks", { leafId: get().selectedLeafId }).then((forkIds) => {
+            set({ _forkNodeIds: new Set(forkIds) });
           });
         } else {
-          set({ _newBranchNodeId: node.id });
+          // New branch: add to sidebar and switch to it via selectBranch
+          set((s) => {
+            const newBranch = { branchId: node.id, count: 1, preview: node.content };
+            const exists = s.branches.some((b) => b.branchId === node.id);
+            const newBranches = exists ? s.branches : [...s.branches, newBranch];
+            return {
+              branches: newBranches,
+              selectedLeafId: node.id,
+            };
+          });
+          get().selectBranch(node.id);
         }
         return node;
       } catch {
@@ -237,7 +248,6 @@ export const useStore = create((set, get) => {
       const prev = get().nodes;
       const prevPath = get().selectedPath;
 
-      // Collect descendant node IDs from child branches (only nodes AFTER the target)
       const idsToDelete = new Set([id]);
       try {
         const childBranches = await send("branches:from", { nodeId: id });
@@ -250,11 +260,8 @@ export const useStore = create((set, get) => {
             }
           }
         }
-      } catch {
-        // If branches:from fails, fall back to deleting from current path
-      }
+      } catch {}
 
-      // Also collect nodes after this one in the current path
       const idx = prevPath.indexOf(id);
       if (idx >= 0) {
         for (let i = idx + 1; i < prevPath.length; i++) {
@@ -262,16 +269,14 @@ export const useStore = create((set, get) => {
         }
       }
 
-      // Optimistic update: remove all collected nodes and truncate path
       const newPath = idx >= 0 ? prevPath.slice(0, idx) : prevPath;
       set({
         nodes: prev.filter((n) => !idsToDelete.has(n.id)),
         selectedPath: newPath,
       });
 
-      // Send deletes to server
       try {
-        await Promise.all([...idsToDelete].map((nid) => send("nodes:delete", { id: nid })));
+        await send("nodes:delete_batch", { ids: [...idsToDelete] });
       } catch {
         set({ nodes: prev, selectedPath: prevPath });
       }
@@ -300,7 +305,6 @@ export const useStore = create((set, get) => {
       const prevNodes = get().nodes;
       const prevPath = get().selectedPath;
 
-      // Calculate the new nodes and new path
       const dragIdx = prevNodes.findIndex((n) => n.id === nodeId);
       if (dragIdx < 0) return;
 
@@ -311,20 +315,17 @@ export const useStore = create((set, get) => {
         const targetIdx = without.findIndex((n) => n.id === beforeId);
         newNodes = [...without];
         if (targetIdx >= 0) newNodes.splice(targetIdx, 0, dragged);
-        else newNodes.push(dragged); // Fallback if target not found
+        else newNodes.push(dragged);
       } else {
         newNodes = [...without, dragged];
       }
       const newPath = newNodes.map((n) => n.id);
 
-      // Optimistic update with new path
       set({ nodes: newNodes, selectedPath: newPath, _skipLoadNodes: true });
 
       try {
-        // Send the NEW path to the server
         await send("nodes:reorder", { id: nodeId, beforeId, path: newPath });
       } catch {
-        // Revert both nodes and path
         set({ nodes: prevNodes, selectedPath: prevPath });
       }
     },
@@ -346,15 +347,17 @@ export const useStore = create((set, get) => {
         set((s) => {
           const newPath = [...s.selectedPath, node.id];
           const newBranches = s.branches.map((b) => {
-            if (b.path === s.selectedPath || pathKey(b.path) === pathKey(s.selectedPath)) {
-              b.path = newPath;
+            if (b.branchId === s.selectedLeafId) {
               b.count = newPath.length;
+              b.branchId = node.id;
+              b.preview = node.content;
             }
             return b;
           });
           return {
             nodes: [...s.nodes, node],
             selectedPath: newPath,
+            selectedLeafId: node.id,
             branches: newBranches,
             _skipLoadNodes: true,
             _scrollToBottom: true,
@@ -372,22 +375,9 @@ export const useStore = create((set, get) => {
       return idx >= 0 ? idx + 1 : "?";
     },
 
+    /** Fork points loaded from the backend — nodes with >1 child. */
     getForkPoints: () => {
-      const { branches } = get();
-      const forkPoints = new Set();
-      for (const branch of branches) {
-        for (let i = 0; i < branch.path.length - 1; i++) {
-          const parent = branch.path[i];
-          const child = branch.path[i + 1];
-          for (const other of branches) {
-            const idx = other.path.indexOf(parent);
-            if (idx >= 0 && idx < other.path.length - 1 && other.path[idx + 1] !== child) {
-              forkPoints.add(parent);
-            }
-          }
-        }
-      }
-      return forkPoints;
+      return get()._forkNodeIds;
     },
   };
 });

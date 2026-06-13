@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, memo } from "react";
 import { GitBranch, Link2, Plus } from "lucide-react";
 import { useStore } from "../store/use-store";
 import { Button } from "./ui/button";
 
-export function InsertNode({ prevNode, nextNode, beforeCreate }) {
+export const InsertNode = memo(function InsertNode({ prevNode, nextNode, beforeCreate }) {
   const createNode = useStore((s) => s.createNode);
   const hoveredNodeId = useStore((s) => s._hoveredNodeId);
   const draggedNodeId = useStore((s) => s._draggedNodeId);
@@ -74,6 +74,7 @@ export function InsertNode({ prevNode, nextNode, beforeCreate }) {
   if (active) {
     return (
       <div ref={wrapperRef} className="flex items-stretch">
+        <div className="w-10 shrink-0" />
         <div className="relative w-8 shrink-0 flex items-center justify-center">
           <div className="w-3 h-3 rounded-full border-2 border-dashed border-timeline-active bg-white shrink-0" />
         </div>
@@ -117,13 +118,15 @@ export function InsertNode({ prevNode, nextNode, beforeCreate }) {
   // Default: zero-height, full-width hover/click zone
   return (
     <div
-      className="relative overflow-visible select-none cursor-pointer"
+      className="relative overflow-visible select-none cursor-pointer flex"
       style={{ height: 0, paddingTop: 10, marginTop: -10 }}
       data-drop-insert="gap"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={() => { if (!isDragging) setActive(true); }}
     >
+      {/* Spacer — matches index column width */}
+      <div className="w-10 shrink-0" />
       {/* Plus icon on the timeline — opaque background covers the continuous line */}
       {!isDragging && (
         <div
@@ -150,7 +153,7 @@ export function InsertNode({ prevNode, nextNode, beforeCreate }) {
       {showDropIndicator && (
         <>
           <div className="absolute inset-x-0 h-[2px] bg-timeline-active shadow-[0_0_6px_var(--color-timeline-active)]" style={{ top: "50%", transform: "translateY(-50%)" }} />
-          <div className="absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-timeline-active text-white text-[11px] font-medium shadow-sm whitespace-nowrap" style={{ left: 24, top: "50%", transform: "translateY(-50%)" }}>
+          <div className="absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-timeline-active text-white text-[11px] font-medium shadow-sm whitespace-nowrap" style={{ left: 64, top: "50%", transform: "translateY(-50%)" }}>
             <Plus className="h-3 w-3" />
             Drop here
           </div>
@@ -158,4 +161,4 @@ export function InsertNode({ prevNode, nextNode, beforeCreate }) {
       )}
     </div>
   );
-}
+});

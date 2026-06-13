@@ -1,43 +1,41 @@
 import { db, getNode, getBranchMeta, getBranchPath, getBranchNodes } from "./db.ts";
 
-const clients = new Set<any>();
+const clients = new Set<WebSocket>();
 
-export function broadcast(data: unknown, exclude?: any) {
+export function broadcast(data: unknown, exclude?: WebSocket) {
   const msg = JSON.stringify(data);
   for (const ws of clients) {
-    if (ws !== exclude && ws.readyState === ws.OPEN) ws.send(msg);
+    if (ws !== exclude && ws.readyState === WebSocket.OPEN) ws.send(msg);
   }
 }
 
-function send(ws: any, data: unknown) {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(data));
+function send(ws: WebSocket, data: unknown) {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
 }
 
 /** Broadcast lightweight branch metadata to all clients. */
-function broadcastBranchMeta(exclude?: any) {
+function broadcastBranchMeta(exclude?: WebSocket) {
   const branches = getBranchMeta();
   broadcast({ action: "branches:list", data: branches }, exclude);
   return branches;
 }
 
-export function setupWebSocket(wss: any) {
-  wss.on("connection", (ws: any) => {
-    clients.add(ws);
-    console.log(`🔌 Client connected (${clients.size} total)`);
+export function handleWebSocket(socket: WebSocket) {
+  clients.add(socket);
+  console.log(`🔌 Client connected (${clients.size} total)`);
 
-    ws.on("message", (raw: any) => {
-      try { handleMessage(ws, raw.toString()); }
-      catch (e) { console.error("WS error:", e); }
-    });
+  socket.onmessage = (event) => {
+    try { handleMessage(socket, event.data as string); }
+    catch (e) { console.error("WS error:", e); }
+  };
 
-    ws.on("close", () => {
-      clients.delete(ws);
-      console.log(`🔌 Client disconnected (${clients.size} total)`);
-    });
-  });
+  socket.onclose = () => {
+    clients.delete(socket);
+    console.log(`🔌 Client disconnected (${clients.size} total)`);
+  };
 }
 
-function handleMessage(ws: any, raw: string) {
+function handleMessage(ws: WebSocket, raw: string) {
   const msg = JSON.parse(raw);
   const { action, requestId, payload } = msg;
 
@@ -64,7 +62,6 @@ function handleMessage(ws: any, raw: string) {
         send(ws, { action: "branches:forks", requestId, data: [] });
         break;
       }
-      // Walk from leaf to root via parent_id, check each node for >1 child
       const rows = db.prepare(`
         WITH RECURSIVE path(id, parent_id) AS (
           SELECT id, parent_id FROM nodes WHERE id = ?
@@ -124,10 +121,8 @@ function handleMessage(ws: any, raw: string) {
     case "nodes:list": {
       const { leafId, path } = payload;
       if (leafId != null) {
-        // New: load by leafId — single recursive CTE, no full-table scan
         send(ws, { action: "nodes:list", requestId, data: getBranchNodes(leafId) });
       } else if (path && Array.isArray(path) && path.length > 0) {
-        // Legacy: load by path array — fetch from DB by IDs
         const placeholders = path.map(() => "?").join(",");
         const nodeMap = new Map(
           (db.prepare(`SELECT * FROM nodes WHERE id IN (${placeholders})`).all(...path) as any[])

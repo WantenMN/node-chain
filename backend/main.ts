@@ -1,12 +1,18 @@
-import { createServer } from "node:http";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { WebSocketServer } from "ws";
+import { join } from "@std/path";
 import open from "open";
 import { serveStatic } from "./static.ts";
-import { setupWebSocket } from "./ws.ts";
+import { handleWebSocket } from "./ws.ts";
 
 const PORT = 8080;
+
+function existsSync(path: string): boolean {
+  try {
+    Deno.statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ── Auto-build frontend ─────────────────────────────────────────────────────
 async function ensureFrontendBuilt() {
@@ -26,25 +32,24 @@ async function ensureFrontendBuilt() {
   console.log(success ? "✅ Frontend built" : "❌ Frontend build failed");
 }
 
-// ── HTTP Server ─────────────────────────────────────────────────────────────
-const server = createServer((req, res) => {
-  const url = new URL(req.url!, `http://localhost:${PORT}`);
-  if (url.pathname === "/ws") return;
+// ── Start ───────────────────────────────────────────────────────────────────
+await ensureFrontendBuilt();
+
+Deno.serve({ port: PORT }, (req) => {
+  const url = new URL(req.url);
+
+  if (url.pathname === "/ws") {
+    const { socket, response } = Deno.upgradeWebSocket(req);
+    handleWebSocket(socket);
+    return response;
+  }
+
   try {
-    serveStatic(res, url.pathname);
+    return serveStatic(url.pathname);
   } catch {
-    res.writeHead(500);
-    res.end("Internal Server Error");
+    return new Response("Internal Server Error", { status: 500 });
   }
 });
 
-// ── WebSocket Server ────────────────────────────────────────────────────────
-const wss = new WebSocketServer({ server, path: "/ws" });
-setupWebSocket(wss);
-
-// ── Start ───────────────────────────────────────────────────────────────────
-await ensureFrontendBuilt();
-server.listen(PORT, async () => {
-  console.log(`🚀 Server at http://localhost:${PORT}`);
-  if (!Deno.args.includes("--dev")) await open(`http://localhost:${PORT}`);
-});
+console.log(`🚀 Server at http://localhost:${PORT}`);
+if (!Deno.args.includes("--dev")) await open(`http://localhost:${PORT}`);

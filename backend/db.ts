@@ -1,9 +1,12 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join } from "@std/path";
 import { DatabaseSync } from "node:sqlite";
 
 const DATA_DIR = join(import.meta.dirname!, "data");
-if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+try {
+  Deno.statSync(DATA_DIR);
+} catch {
+  Deno.mkdirSync(DATA_DIR, { recursive: true });
+}
 
 export const db = new DatabaseSync(join(DATA_DIR, "data.db"));
 db.exec("PRAGMA journal_mode = WAL");

@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "dev": "deno task dev:backend & deno task dev:frontend",
+    "dev:frontend": "deno run -A npm:vite",
+    "dev:backend": "deno run -A backend/main.ts --dev",
+    "build": "deno run -A npm:vite build",
+    "start": "deno task build && deno run -A backend/main.ts"
+  }
+}
